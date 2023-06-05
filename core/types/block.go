@@ -33,9 +33,6 @@ import (
 	"github.com/ledgerwatch/erigon-lib/common/hexutility"
 	rlp2 "github.com/ledgerwatch/erigon-lib/rlp"
 
-	"github.com/ledgerwatch/erigon/cl/clparams"
-	"github.com/ledgerwatch/erigon/cl/cltypes/ssz_utils"
-	"github.com/ledgerwatch/erigon/cl/merkle_tree"
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
 	"github.com/ledgerwatch/erigon/rlp"
@@ -65,7 +62,7 @@ func (n BlockNonce) Uint64() uint64 {
 
 // MarshalText encodes n as a hex string with 0x prefix.
 func (n BlockNonce) MarshalText() ([]byte, error) {
-	return hexutil.Bytes(n[:]).MarshalText()
+	return hexutility.Bytes(n[:]).MarshalText()
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
@@ -100,14 +97,14 @@ type Header struct {
 	BaseFee         *big.Int        `json:"baseFeePerGas"`   // EIP-1559
 	WithdrawalsHash *libcommon.Hash `json:"withdrawalsRoot"` // EIP-4895
 
+	// DataGasUsed & ExcessDataGas were added by EIP-4844 and are ignored in legacy headers.
+	DataGasUsed   *uint64 `json:"dataGasUsed"`
+	ExcessDataGas *uint64 `json:"excessDataGas"`
+
 	// The verkle proof is ignored in legacy headers
 	Verkle        bool
 	VerkleProof   []byte
 	VerkleKeyVals []verkle.KeyValuePair
-	// ETH2 fields
-	// This is the block hash given by the CL,we cannot validate in the context of the state.
-	BlockHashCL libcommon.Hash
-	TxHashSSZ   libcommon.Hash // They decided to hash txs differently than EL :(
 }
 
 func bitsToBytes(bitLen int) (byteLen int) {
@@ -163,6 +160,15 @@ func (h *Header) EncodingSize() int {
 
 	if h.WithdrawalsHash != nil {
 		encodingSize += 33
+	}
+
+	if h.DataGasUsed != nil {
+		encodingSize++
+		encodingSize += rlp.IntLenExcludingHead(*h.DataGasUsed)
+	}
+	if h.ExcessDataGas != nil {
+		encodingSize++
+		encodingSize += rlp.IntLenExcludingHead(*h.ExcessDataGas)
 	}
 
 	if h.Verkle {
@@ -303,6 +309,17 @@ func (h *Header) EncodeRLP(w io.Writer) error {
 			return err
 		}
 		if _, err := w.Write(h.WithdrawalsHash.Bytes()); err != nil {
+			return err
+		}
+	}
+
+	if h.DataGasUsed != nil {
+		if err := rlp.EncodeInt(*h.DataGasUsed, w, b[:]); err != nil {
+			return err
+		}
+	}
+	if h.ExcessDataGas != nil {
+		if err := rlp.EncodeInt(*h.ExcessDataGas, w, b[:]); err != nil {
 			return err
 		}
 	}
@@ -452,6 +469,32 @@ func (h *Header) DecodeRLP(s *rlp.Stream) error {
 	h.WithdrawalsHash = new(libcommon.Hash)
 	h.WithdrawalsHash.SetBytes(b)
 
+	var dataGasUsed uint64
+	if dataGasUsed, err = s.Uint(); err != nil {
+		if errors.Is(err, rlp.EOL) {
+			h.DataGasUsed = nil
+			if err := s.ListEnd(); err != nil {
+				return fmt.Errorf("close header struct (no DataGasUsed): %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("read DataGasUsed: %w", err)
+	}
+	h.DataGasUsed = &dataGasUsed
+
+	var excessDataGas uint64
+	if excessDataGas, err = s.Uint(); err != nil {
+		if errors.Is(err, rlp.EOL) {
+			h.ExcessDataGas = nil
+			if err := s.ListEnd(); err != nil {
+				return fmt.Errorf("close header struct (no ExcessDataGas): %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("read ExcessDataGas: %w", err)
+	}
+	h.ExcessDataGas = &excessDataGas
+
 	if h.Verkle {
 		if h.VerkleProof, err = s.Bytes(); err != nil {
 			return fmt.Errorf("read VerkleProof: %w", err)
@@ -471,14 +514,16 @@ func (h *Header) DecodeRLP(s *rlp.Stream) error {
 
 // field type overrides for gencodec
 type headerMarshaling struct {
-	Difficulty *hexutil.Big
-	Number     *hexutil.Big
-	GasLimit   hexutil.Uint64
-	GasUsed    hexutil.Uint64
-	Time       hexutil.Uint64
-	Extra      hexutil.Bytes
-	BaseFee    *hexutil.Big
-	Hash       libcommon.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
+	Difficulty    *hexutil.Big
+	Number        *hexutil.Big
+	GasLimit      hexutil.Uint64
+	GasUsed       hexutil.Uint64
+	Time          hexutil.Uint64
+	Extra         hexutility.Bytes
+	BaseFee       *hexutil.Big
+	DataGasUsed   *hexutil.Uint64
+	ExcessDataGas *hexutil.Uint64
+	Hash          libcommon.Hash `json:"hash"` // adds call to Hash() in MarshalJSON
 }
 
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
@@ -498,6 +543,12 @@ func (h *Header) Size() common.StorageSize {
 	}
 	if h.WithdrawalsHash != nil {
 		s += common.StorageSize(32)
+	}
+	if h.DataGasUsed != nil {
+		s += common.StorageSize(8)
+	}
+	if h.ExcessDataGas != nil {
+		s += common.StorageSize(8)
 	}
 	return s
 }
@@ -523,187 +574,8 @@ func (h *Header) SanityCheck() error {
 			return fmt.Errorf("too large base fee: bitlen %d", bfLen)
 		}
 	}
+
 	return nil
-}
-
-func (h *Header) EncodeHeaderMetadataForSSZ(dst []byte, extraDataOffset int) ([]byte, error) {
-	buf := dst
-	buf = append(buf, h.ParentHash[:]...)
-	buf = append(buf, h.Coinbase[:]...)
-	buf = append(buf, h.Root[:]...)
-	buf = append(buf, h.ReceiptHash[:]...)
-	buf = append(buf, h.Bloom[:]...)
-	buf = append(buf, h.MixDigest[:]...)
-	buf = append(buf, ssz_utils.Uint64SSZ(h.Number.Uint64())...)
-	buf = append(buf, ssz_utils.Uint64SSZ(h.GasLimit)...)
-	buf = append(buf, ssz_utils.Uint64SSZ(h.GasUsed)...)
-	buf = append(buf, ssz_utils.Uint64SSZ(h.Time)...)
-	buf = append(buf, ssz_utils.OffsetSSZ(uint32(extraDataOffset))...)
-
-	// Add Base Fee
-	var baseFeeBytes32 [32]byte // Base fee is padded.
-	baseFeeBytes := h.BaseFee.Bytes()
-	for i, j := 0, len(baseFeeBytes)-1; i < j; i, j = i+1, j-1 {
-		baseFeeBytes[i], baseFeeBytes[j] = baseFeeBytes[j], baseFeeBytes[i]
-	}
-	copy(baseFeeBytes32[:], baseFeeBytes)
-	buf = append(buf, baseFeeBytes32[:]...)
-	buf = append(buf, h.BlockHashCL[:]...)
-	return buf, nil
-}
-
-func (h *Header) EncodeSSZ(dst []byte) (buf []byte, err error) {
-	buf = dst
-	offset := ssz_utils.BaseExtraDataSSZOffsetHeader
-
-	if h.WithdrawalsHash != nil {
-		offset += 32
-	}
-
-	buf, err = h.EncodeHeaderMetadataForSSZ(buf, offset)
-	if err != nil {
-		return nil, err
-	}
-	buf = append(buf, h.TxHashSSZ[:]...)
-
-	if h.WithdrawalsHash != nil {
-		buf = append(buf, h.WithdrawalsHash[:]...)
-	}
-
-	buf = append(buf, h.Extra...)
-	return
-}
-
-// NOTE: it is skipping extra data
-func (h *Header) DecodeHeaderMetadataForSSZ(buf []byte) (pos int, extraDataOffset int) {
-	h.UncleHash = EmptyUncleHash
-	h.Difficulty = libcommon.Big0
-
-	copy(h.ParentHash[:], buf)
-	pos = len(h.ParentHash)
-
-	copy(h.Coinbase[:], buf[pos:])
-	pos += len(h.Coinbase)
-
-	copy(h.Root[:], buf[pos:])
-	pos += len(h.Root)
-
-	copy(h.ReceiptHash[:], buf[pos:])
-	pos += len(h.ReceiptHash)
-
-	h.Bloom.SetBytes(buf[pos : pos+BloomByteLength])
-	pos += BloomByteLength
-
-	copy(h.MixDigest[:], buf[pos:])
-	pos += len(h.MixDigest)
-
-	h.Number = new(big.Int).SetUint64(ssz_utils.UnmarshalUint64SSZ(buf[pos:]))
-	h.GasLimit = ssz_utils.UnmarshalUint64SSZ(buf[pos+8:])
-	h.GasUsed = ssz_utils.UnmarshalUint64SSZ(buf[pos+16:])
-	h.Time = ssz_utils.UnmarshalUint64SSZ(buf[pos+24:])
-	pos += 32
-	extraDataOffset = int(ssz_utils.DecodeOffset(buf[pos:]))
-	pos += 4
-	// Add Base Fee
-	baseFeeBytes := common.CopyBytes(buf[pos : pos+32])
-	for i, j := 0, len(baseFeeBytes)-1; i < j; i, j = i+1, j-1 {
-		baseFeeBytes[i], baseFeeBytes[j] = baseFeeBytes[j], baseFeeBytes[i]
-	}
-	h.BaseFee = new(big.Int).SetBytes(baseFeeBytes)
-	pos += 32
-	copy(h.BlockHashCL[:], buf[pos:pos+32])
-	pos += 32
-	return
-}
-
-func (h *Header) DecodeSSZ(buf []byte, version clparams.StateVersion) error {
-	if len(buf) < h.EncodingSizeSSZ(version) {
-		return ssz_utils.ErrLowBufferSize
-	}
-	pos, _ := h.DecodeHeaderMetadataForSSZ(buf)
-	copy(h.TxHashSSZ[:], buf[pos:pos+32])
-	pos += len(h.TxHashSSZ)
-
-	if version >= clparams.CapellaVersion {
-		h.WithdrawalsHash = new(libcommon.Hash)
-		copy((*h.WithdrawalsHash)[:], buf[pos:])
-		pos += len(h.WithdrawalsHash)
-	} else {
-		h.WithdrawalsHash = nil
-	}
-	h.Extra = common.CopyBytes(buf[pos:])
-	return nil
-}
-
-// EncodingSizeSSZ returns the ssz encoded size in bytes for the Header object
-func (h *Header) EncodingSizeSSZ(version clparams.StateVersion) int {
-	size := 536
-
-	if h.WithdrawalsHash != nil || version >= clparams.CapellaVersion {
-		size += 32
-	}
-
-	return size + len(h.Extra)
-}
-
-func (h *Header) HashSSZ() ([32]byte, error) {
-	// Compute coinbase leaf
-	var coinbase32 [32]byte
-	copy(coinbase32[:], h.Coinbase[:])
-	// Compute Bloom leaf
-	bloomLeaf, err := merkle_tree.ArraysRoot([][32]byte{
-		libcommon.BytesToHash(h.Bloom[:32]),
-		libcommon.BytesToHash(h.Bloom[32:64]),
-		libcommon.BytesToHash(h.Bloom[64:96]),
-		libcommon.BytesToHash(h.Bloom[96:128]),
-		libcommon.BytesToHash(h.Bloom[128:160]),
-		libcommon.BytesToHash(h.Bloom[160:192]),
-		libcommon.BytesToHash(h.Bloom[192:224]),
-		libcommon.BytesToHash(h.Bloom[224:]),
-	}, 8)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	// Compute baseFee leaf
-	baseFeeBytes := h.BaseFee.Bytes()
-	for i, j := 0, len(baseFeeBytes)-1; i < j; i, j = i+1, j-1 {
-		baseFeeBytes[i], baseFeeBytes[j] = baseFeeBytes[j], baseFeeBytes[i]
-	}
-	var baseFeeLeaf libcommon.Hash
-	copy(baseFeeLeaf[:], baseFeeBytes)
-	// Compute extra data leaf
-	var extraLeaf libcommon.Hash
-
-	var baseExtraLeaf [32]byte
-	copy(baseExtraLeaf[:], h.Extra)
-
-	extraLeaf, err = merkle_tree.ArraysRoot([][32]byte{
-		baseExtraLeaf,
-		merkle_tree.Uint64Root(uint64(len(h.Extra)))}, 2)
-	if err != nil {
-		return [32]byte{}, err
-	}
-
-	leaves := [][32]byte{
-		h.ParentHash,
-		coinbase32,
-		h.Root,
-		h.ReceiptHash,
-		bloomLeaf,
-		h.MixDigest,
-		merkle_tree.Uint64Root(h.Number.Uint64()),
-		merkle_tree.Uint64Root(h.GasLimit),
-		merkle_tree.Uint64Root(h.GasUsed),
-		merkle_tree.Uint64Root(h.Time),
-		extraLeaf,
-		baseFeeLeaf,
-		h.BlockHashCL,
-		h.TxHashSSZ,
-	}
-	if h.WithdrawalsHash != nil {
-		leaves = append(leaves, *h.WithdrawalsHash)
-	}
-	return merkle_tree.ArraysRoot(leaves, 16)
 }
 
 // Body is a simple (mutable, non-safe) data container for storing and moving
@@ -1208,7 +1080,7 @@ func (bb *Body) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	var tx Transaction
-	for tx, err = DecodeTransaction(s); err == nil; tx, err = DecodeTransaction(s) {
+	for tx, err = DecodeRLPTransaction(s); err == nil; tx, err = DecodeRLPTransaction(s) {
 		bb.Transactions = append(bb.Transactions, tx)
 	}
 	if !errors.Is(err, rlp.EOL) {
@@ -1360,6 +1232,14 @@ func CopyHeader(h *Header) *Header {
 		cpy.WithdrawalsHash = new(libcommon.Hash)
 		cpy.WithdrawalsHash.SetBytes(h.WithdrawalsHash.Bytes())
 	}
+	if h.DataGasUsed != nil {
+		dataGasUsed := *h.DataGasUsed
+		cpy.DataGasUsed = &dataGasUsed
+	}
+	if h.ExcessDataGas != nil {
+		excessDataGas := *h.ExcessDataGas
+		cpy.ExcessDataGas = &excessDataGas
+	}
 	return &cpy
 }
 
@@ -1383,7 +1263,7 @@ func (bb *Block) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	var tx Transaction
-	for tx, err = DecodeTransaction(s); err == nil; tx, err = DecodeTransaction(s) {
+	for tx, err = DecodeRLPTransaction(s); err == nil; tx, err = DecodeRLPTransaction(s) {
 		bb.transactions = append(bb.transactions, tx)
 	}
 	if !errors.Is(err, rlp.EOL) {

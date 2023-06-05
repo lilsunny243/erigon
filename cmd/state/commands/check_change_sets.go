@@ -19,20 +19,19 @@ import (
 	"github.com/ledgerwatch/log/v3"
 	"github.com/spf13/cobra"
 
-	"github.com/ledgerwatch/erigon/core"
 	"github.com/ledgerwatch/erigon/core/state"
 	"github.com/ledgerwatch/erigon/core/systemcontracts"
 	"github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/core/vm"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
+	"github.com/ledgerwatch/erigon/turbo/debug"
 	"github.com/ledgerwatch/erigon/turbo/snapshotsync"
 )
 
 var (
-	historyfile    string
-	nocheck        bool
-	transactionsV3 bool
+	historyfile string
+	nocheck     bool
 )
 
 func init() {
@@ -41,7 +40,6 @@ func init() {
 	withSnapshotBlocks(checkChangeSetsCmd)
 	checkChangeSetsCmd.Flags().StringVar(&historyfile, "historyfile", "", "path to the file where the changesets and history are expected to be. If omitted, the same as <datadir>/erion/chaindata")
 	checkChangeSetsCmd.Flags().BoolVar(&nocheck, "nocheck", false, "set to turn off the changeset checking and only execute transaction (for performance testing)")
-	checkChangeSetsCmd.Flags().BoolVar(&transactionsV3, "experimental.transactions.v3", false, "(this flag is in testing stage) Not recommended yet: Can't change this flag after node creation. New DB table for transactions allows keeping multiple branches of block bodies in the DB simultaneously")
 	rootCmd.AddCommand(checkChangeSetsCmd)
 }
 
@@ -49,14 +47,19 @@ var checkChangeSetsCmd = &cobra.Command{
 	Use:   "checkChangeSets",
 	Short: "Re-executes historical transactions in read-only mode and checks that their outputs match the database ChangeSets",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := log.New()
-		return CheckChangeSets(genesis, logger, block, chaindata, historyfile, nocheck, transactionsV3)
+		var logger log.Logger
+		var err error
+		if logger, err = debug.SetupCobra(cmd, "check_change_sets"); err != nil {
+			logger.Error("Setting up", "error", err)
+			return err
+		}
+		return CheckChangeSets(genesis, logger, block, chaindata, historyfile, nocheck)
 	},
 }
 
 // CheckChangeSets re-executes historical transactions in read-only mode
 // and checks that their outputs match the database ChangeSets.
-func CheckChangeSets(genesis *core.Genesis, logger log.Logger, blockNum uint64, chaindata string, historyfile string, nocheck bool, transactionV3 bool) error {
+func CheckChangeSets(genesis *types.Genesis, logger log.Logger, blockNum uint64, chaindata string, historyfile string, nocheck bool) error {
 	if len(historyfile) == 0 {
 		historyfile = chaindata
 	}
@@ -75,12 +78,12 @@ func CheckChangeSets(genesis *core.Genesis, logger log.Logger, blockNum uint64, 
 	if err != nil {
 		return err
 	}
-	allSnapshots := snapshotsync.NewRoSnapshots(ethconfig.NewSnapCfg(true, false, true), path.Join(datadirCli, "snapshots"))
+	allSnapshots := snapshotsync.NewRoSnapshots(ethconfig.NewSnapCfg(true, false, true), path.Join(datadirCli, "snapshots"), logger)
 	defer allSnapshots.Close()
 	if err := allSnapshots.ReopenFolder(); err != nil {
 		return fmt.Errorf("reopen snapshot segments: %w", err)
 	}
-	blockReader := snapshotsync.NewBlockReaderWithSnapshots(allSnapshots, transactionV3)
+	blockReader := snapshotsync.NewBlockReader(allSnapshots)
 
 	chainDb := db
 	defer chainDb.Close()
@@ -118,7 +121,7 @@ func CheckChangeSets(genesis *core.Genesis, logger log.Logger, blockNum uint64, 
 	commitEvery := time.NewTicker(30 * time.Second)
 	defer commitEvery.Stop()
 
-	engine := initConsensusEngine(chainConfig, allSnapshots)
+	engine := initConsensusEngine(chainConfig, allSnapshots, logger)
 
 	for !interrupt {
 
@@ -258,7 +261,7 @@ func CheckChangeSets(genesis *core.Genesis, logger log.Logger, blockNum uint64, 
 
 		blockNum++
 		if blockNum%1000 == 0 {
-			log.Info("Checked", "blocks", blockNum)
+			logger.Info("Checked", "blocks", blockNum)
 		}
 
 		// Check for interrupts
@@ -268,6 +271,6 @@ func CheckChangeSets(genesis *core.Genesis, logger log.Logger, blockNum uint64, 
 		default:
 		}
 	}
-	log.Info("Checked", "blocks", blockNum, "next time specify --block", blockNum, "duration", time.Since(startTime))
+	logger.Info("Checked", "blocks", blockNum, "next time specify --block", blockNum, "duration", time.Since(startTime))
 	return nil
 }

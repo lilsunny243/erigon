@@ -67,6 +67,10 @@ func (tx DynamicFeeTransaction) Cost() *uint256.Int {
 	return total
 }
 
+func (tx *DynamicFeeTransaction) Unwrap() Transaction {
+	return tx
+}
+
 // copy creates a deep copy of the transaction data and initializes all fields.
 func (tx DynamicFeeTransaction) copy() *DynamicFeeTransaction {
 	cpy := &DynamicFeeTransaction{
@@ -463,7 +467,7 @@ func (tx *DynamicFeeTransaction) Sender(signer Signer) (libcommon.Address, error
 	return addr, nil
 }
 
-// NewTransaction creates an unsigned eip1559 transaction.
+// NewEIP1559Transaction creates an unsigned eip1559 transaction.
 func NewEIP1559Transaction(chainID uint256.Int, nonce uint64, to libcommon.Address, amount *uint256.Int, gasLimit uint64, gasPrice *uint256.Int, gasTip *uint256.Int, gasFeeCap *uint256.Int, data []byte) *DynamicFeeTransaction {
 	return &DynamicFeeTransaction{
 		CommonTx: CommonTx{

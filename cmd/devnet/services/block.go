@@ -8,22 +8,61 @@ import (
 
 	"github.com/holiman/uint256"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
+	"github.com/ledgerwatch/log/v3"
 
 	"github.com/ledgerwatch/erigon/accounts/abi/bind"
 	"github.com/ledgerwatch/erigon/cmd/devnet/contracts"
 	"github.com/ledgerwatch/erigon/cmd/devnet/devnetutils"
 	"github.com/ledgerwatch/erigon/cmd/devnet/models"
+	"github.com/ledgerwatch/erigon/cmd/devnet/node"
 	"github.com/ledgerwatch/erigon/cmd/devnet/requests"
 	"github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/params"
 	"github.com/ledgerwatch/erigon/rpc"
 )
 
-const gasPrice = 912345678
+const gasPrice = 912_345_678
+const gasAmount = 875_000_000
 
 var (
 	signer = types.LatestSigner(params.AllCliqueProtocolChanges)
 )
+
+func CreateManyEIP1559TransactionsRefWithBaseFee(node *node.Node, addr string, startingNonce *uint64, logger log.Logger) ([]*types.Transaction, []*types.Transaction, error) {
+	toAddress := libcommon.HexToAddress(addr)
+
+	baseFeePerGas, err := BaseFeeFromBlock(node, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed BaseFeeFromBlock: %v", err)
+	}
+
+	logger.Info("BaseFeePerGas", "val", baseFeePerGas)
+
+	lowerBaseFeeTransactions, higherBaseFeeTransactions, err := signEIP1559TxsLowerAndHigherThanBaseFee2(1, 1, baseFeePerGas, startingNonce, toAddress, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed signEIP1559TxsLowerAndHigherThanBaseFee2: %v", err)
+	}
+
+	return lowerBaseFeeTransactions, higherBaseFeeTransactions, nil
+}
+
+func CreateManyEIP1559TransactionsRefWithBaseFee2(node *node.Node, addr string, startingNonce *uint64, logger log.Logger) ([]*types.Transaction, []*types.Transaction, error) {
+	toAddress := libcommon.HexToAddress(addr)
+
+	baseFeePerGas, err := BaseFeeFromBlock(node, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed BaseFeeFromBlock: %v", err)
+	}
+
+	logger.Info("BaseFeePerGas2", "val", baseFeePerGas)
+
+	lowerBaseFeeTransactions, higherBaseFeeTransactions, err := signEIP1559TxsLowerAndHigherThanBaseFee2(100, 100, baseFeePerGas, startingNonce, toAddress, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed signEIP1559TxsLowerAndHigherThanBaseFee2: %v", err)
+	}
+
+	return lowerBaseFeeTransactions, higherBaseFeeTransactions, nil
+}
 
 // CreateTransaction creates a transaction depending on the type of transaction being passed
 func CreateTransaction(txType models.TransactionType, addr string, value, nonce uint64) (*types.Transaction, libcommon.Address, *contracts.Subscription, *bind.TransactOpts, error) {
@@ -55,6 +94,92 @@ func createNonContractTx(addr string, value, nonce uint64) (*types.Transaction, 
 	}
 
 	return &signedTx, toAddress, nil
+}
+
+func signEIP1559TxsLowerAndHigherThanBaseFee2(amountLower, amountHigher int, baseFeePerGas uint64, nonce *uint64, toAddress libcommon.Address, logger log.Logger) ([]*types.Transaction, []*types.Transaction, error) {
+	higherBaseFeeTransactions, err := signEIP1559TxsHigherThanBaseFee(amountHigher, baseFeePerGas, nonce, toAddress, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed signEIP1559TxsHigherThanBaseFee: %v", err)
+	}
+
+	lowerBaseFeeTransactions, err := signEIP1559TxsLowerThanBaseFee(amountLower, baseFeePerGas, nonce, toAddress, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed signEIP1559TxsLowerThanBaseFee: %v", err)
+	}
+
+	return lowerBaseFeeTransactions, higherBaseFeeTransactions, nil
+}
+
+// signEIP1559TxsLowerThanBaseFee creates n number of transactions with gasFeeCap lower than baseFeePerGas
+func signEIP1559TxsLowerThanBaseFee(n int, baseFeePerGas uint64, nonce *uint64, toAddress libcommon.Address, logger log.Logger) ([]*types.Transaction, error) {
+	var signedTransactions []*types.Transaction
+
+	var (
+		minFeeCap = baseFeePerGas - 300_000_000
+		maxFeeCap = (baseFeePerGas - 100_000_000) + 1 // we want the value to be inclusive in the random number generation, hence the addition of 1
+	)
+
+	for i := 0; i < n; i++ {
+		gasFeeCap, err := devnetutils.RandomNumberInRange(minFeeCap, maxFeeCap)
+		if err != nil {
+			return nil, err
+		}
+
+		value, err := devnetutils.RandomNumberInRange(0, 100_000)
+		if err != nil {
+			return nil, err
+		}
+
+		transaction := types.NewEIP1559Transaction(*signer.ChainID(), *nonce, toAddress, uint256.NewInt(value), uint64(210_000), uint256.NewInt(gasPrice), new(uint256.Int), uint256.NewInt(gasFeeCap), nil)
+
+		logger.Info("LOWER", "transaction", i, "nonce", transaction.Nonce, "value", transaction.Value, "feecap", transaction.FeeCap)
+
+		signedTransaction, err := types.SignTx(transaction, *signer, models.DevSignedPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+
+		signedTransactions = append(signedTransactions, &signedTransaction)
+		*nonce++
+	}
+
+	return signedTransactions, nil
+}
+
+// signEIP1559TxsHigherThanBaseFee creates amount number of transactions with gasFeeCap higher than baseFeePerGas
+func signEIP1559TxsHigherThanBaseFee(n int, baseFeePerGas uint64, nonce *uint64, toAddress libcommon.Address, logger log.Logger) ([]*types.Transaction, error) {
+	var signedTransactions []*types.Transaction
+
+	var (
+		minFeeCap = baseFeePerGas
+		maxFeeCap = (baseFeePerGas + 100_000_000) + 1 // we want the value to be inclusive in the random number generation, hence the addition of 1
+	)
+
+	for i := 0; i < n; i++ {
+		gasFeeCap, err := devnetutils.RandomNumberInRange(minFeeCap, maxFeeCap)
+		if err != nil {
+			return nil, err
+		}
+
+		value, err := devnetutils.RandomNumberInRange(0, 100_000)
+		if err != nil {
+			return nil, err
+		}
+
+		transaction := types.NewEIP1559Transaction(*signer.ChainID(), *nonce, toAddress, uint256.NewInt(value), uint64(210_000), uint256.NewInt(gasPrice), new(uint256.Int), uint256.NewInt(gasFeeCap), nil)
+
+		logger.Info("HIGHER", "transaction", i, "nonce", transaction.Nonce, "value", transaction.Value, "feecap", transaction.FeeCap)
+
+		signedTransaction, err := types.SignTx(transaction, *signer, models.DevSignedPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+
+		signedTransactions = append(signedTransactions, &signedTransaction)
+		*nonce++
+	}
+
+	return signedTransactions, nil
 }
 
 // createContractTx creates and signs a transaction using the developer address, returns the contract and the signed transaction
@@ -97,7 +222,7 @@ func initializeTransactOps(nonce uint64) (*bind.TransactOpts, error) {
 }
 
 // txHashInBlock checks if the block with block number has the transaction hash in its list of transactions
-func txHashInBlock(client *rpc.Client, hashmap map[libcommon.Hash]bool, blockNumber string, txToBlockMap map[libcommon.Hash]string) (uint64, int, error) {
+func txHashInBlock(client *rpc.Client, hashmap map[libcommon.Hash]bool, blockNumber string, txToBlockMap map[libcommon.Hash]string, logger log.Logger) (uint64, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel() // releases the resources held by the context
 
@@ -105,7 +230,7 @@ func txHashInBlock(client *rpc.Client, hashmap map[libcommon.Hash]bool, blockNum
 		currBlock models.Block
 		numFound  int
 	)
-	err := client.CallContext(ctx, &currBlock, string(models.ETHGetBlockByNumber), blockNumber, false)
+	err := client.CallContext(ctx, &currBlock, string(requests.Methods.ETHGetBlockByNumber), blockNumber, false)
 	if err != nil {
 		return uint64(0), 0, fmt.Errorf("failed to get block by number: %v", err)
 	}
@@ -114,12 +239,12 @@ func txHashInBlock(client *rpc.Client, hashmap map[libcommon.Hash]bool, blockNum
 		// check if tx is in the hash set and remove it from the set if it is present
 		if _, ok := hashmap[txnHash]; ok {
 			numFound++
-			fmt.Printf("SUCCESS => Tx with hash %q is in mined block with number %q\n", txnHash, blockNumber)
+			logger.Info("SUCCESS => Tx included into block", "txHash", txnHash, "blockNum", blockNumber)
 			// add the block number as an entry to the map
 			txToBlockMap[txnHash] = blockNumber
 			delete(hashmap, txnHash)
 			if len(hashmap) == 0 {
-				return devnetutils.HexToInt(blockNumber), numFound, nil
+				return requests.HexToInt(blockNumber), numFound, nil
 			}
 		}
 	}
@@ -128,8 +253,8 @@ func txHashInBlock(client *rpc.Client, hashmap map[libcommon.Hash]bool, blockNum
 }
 
 // EmitFallbackEvent emits an event from the contract using the fallback method
-func EmitFallbackEvent(reqId int, subContract *contracts.Subscription, opts *bind.TransactOpts, address libcommon.Address) (*libcommon.Hash, error) {
-	fmt.Println("EMITTING EVENT FROM FALLBACK...")
+func EmitFallbackEvent(node *node.Node, subContract *contracts.Subscription, opts *bind.TransactOpts, logger log.Logger) (*libcommon.Hash, error) {
+	logger.Info("EMITTING EVENT FROM FALLBACK...")
 
 	// adding one to the nonce before initiating another transaction
 	opts.Nonce.Add(opts.Nonce, big.NewInt(1))
@@ -144,13 +269,42 @@ func EmitFallbackEvent(reqId int, subContract *contracts.Subscription, opts *bin
 		return nil, fmt.Errorf("failed to sign fallback transaction: %v", err)
 	}
 
-	hash, err := requests.SendTransaction(models.ReqId, &signedTx)
+	hash, err := node.SendTransaction(&signedTx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send fallback transaction: %v", err)
 	}
-	fmt.Printf("Tx submitted, adding tx with hash %q to txpool\n", hash)
-
-	// TODO: Get all the logs across the blocks that mined the transactions and check that they are logged
 
 	return hash, nil
+}
+
+func BaseFeeFromBlock(node *node.Node, logger log.Logger) (uint64, error) {
+	var val uint64
+	res, err := node.GetBlockByNumberDetails("latest", false)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get base fee from block: %v\n", err)
+	}
+
+	if v, ok := res["baseFeePerGas"]; !ok {
+		return val, fmt.Errorf("baseFeePerGas field missing from response")
+	} else {
+		val = requests.HexToInt(v.(string))
+	}
+
+	return val, err
+}
+
+func SendManyTransactions(node *node.Node, signedTransactions []*types.Transaction, logger log.Logger) ([]*libcommon.Hash, error) {
+	logger.Info("Sending multiple transactions to the txpool...")
+	hashes := make([]*libcommon.Hash, len(signedTransactions))
+
+	for idx, tx := range signedTransactions {
+		hash, err := node.SendTransaction(tx)
+		if err != nil {
+			logger.Error("failed SendTransaction", "error", err)
+			return nil, err
+		}
+		hashes[idx] = hash
+	}
+
+	return hashes, nil
 }

@@ -61,7 +61,10 @@ func (api *OtterscanAPIImpl) GetContractCreator(ctx context.Context, addr common
 		if err != nil {
 			return nil, err
 		}
-		lastTxNum, _ := rawdbv3.TxNums.Max(tx, headNumber)
+		lastTxNum, err := rawdbv3.TxNums.Max(tx, headNumber)
+		if err != nil {
+			return nil, err
+		}
 
 		// Contract; search for creation tx; navigate forward on AccountsHistory/ChangeSets
 		//
@@ -72,7 +75,7 @@ func (api *OtterscanAPIImpl) GetContractCreator(ctx context.Context, addr common
 		// so it is optimal to search from the beginning even if the contract has multiple
 		// incarnations.
 		var prevTxnID, nextTxnID uint64
-		it, err := ttx.IndexRange(temporal.AccountsHistoryIdx, addr[:], 0, int(lastTxNum+1), order.Asc, -1)
+		it, err := ttx.IndexRange(temporal.AccountsHistoryIdx, addr[:], 0, int(lastTxNum+1), order.Asc, kv.Unlim)
 		if err != nil {
 			return nil, err
 		}
@@ -92,6 +95,8 @@ func (api *OtterscanAPIImpl) GetContractCreator(ctx context.Context, addr common
 				log.Error("Unexpected error, couldn't find changeset", "txNum", i, "addr", addr)
 				return nil, err
 			}
+			fmt.Printf("i: %d, %t, %x\n", i, ok, v)
+
 			if !ok {
 				err = fmt.Errorf("couldn't find history txnID=%v addr=%v", txnID, addr)
 				log.Error("[rpc] Unexpected error", "err", err)
