@@ -20,9 +20,8 @@ import (
 	"fmt"
 
 	"github.com/holiman/uint256"
-
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon-lib/txpool"
+	"github.com/ledgerwatch/erigon-lib/txpool/txpoolcfg"
 	types2 "github.com/ledgerwatch/erigon-lib/types"
 
 	"github.com/ledgerwatch/erigon/common"
@@ -85,8 +84,8 @@ type Message interface {
 	FeeCap() *uint256.Int
 	Tip() *uint256.Int
 	Gas() uint64
-	DataGas() uint64
-	MaxFeePerDataGas() *uint256.Int
+	BlobGas() uint64
+	MaxFeePerBlobGas() *uint256.Int
 	Value() *uint256.Int
 
 	Nonce() uint64
@@ -101,10 +100,9 @@ type Message interface {
 // ExecutionResult includes all output after executing given evm
 // message no matter the execution itself is successful or not.
 type ExecutionResult struct {
-	UsedGas     uint64 // Total used gas but include the refunded gas
-	UsedDataGas uint64 // Total data gas used
-	Err         error  // Any error encountered during the execution(listed in core/vm/errors.go)
-	ReturnData  []byte // Returned data from evm(function result or data supplied with revert opcode)
+	UsedGas    uint64 // Total used gas but include the refunded gas
+	Err        error  // Any error encountered during the execution(listed in core/vm/errors.go)
+	ReturnData []byte // Returned data from evm(function result or data supplied with revert opcode)
 }
 
 // Unwrap returns the internal evm error which allows us for further
@@ -145,8 +143,8 @@ func IntrinsicGas(data []byte, accessList types2.AccessList, isContractCreation 
 		}
 	}
 
-	gas, status := txpool.CalcIntrinsicGas(dataLen, dataNonZeroLen, accessList, isContractCreation, isHomestead, isEIP2028, isEIP3860)
-	if status != txpool.Success {
+	gas, status := txpoolcfg.CalcIntrinsicGas(dataLen, dataNonZeroLen, accessList, isContractCreation, isHomestead, isEIP2028, isEIP3860)
+	if status != txpoolcfg.Success {
 		return 0, ErrGasUintOverflow
 	}
 	return gas, nil
@@ -203,20 +201,22 @@ func (st *StateTransition) buyGas(gasBailout bool) error {
 		return fmt.Errorf("%w: address %v", ErrInsufficientFunds, st.msg.From().Hex())
 	}
 
-	// compute data fee for eip-4844 data blobs if any
+	// compute blob fee for eip-4844 data blobs if any
 	dgval := new(uint256.Int)
-	var dataGasUsed uint64
 	if st.evm.ChainRules().IsCancun {
-		if st.evm.Context().ExcessDataGas == nil {
-			return fmt.Errorf("%w: Cancun is active but ExcessDataGas is nil", ErrInternalFailure)
+		if st.evm.Context().ExcessBlobGas == nil {
+			return fmt.Errorf("%w: Cancun is active but ExcessBlobGas is nil", ErrInternalFailure)
 		}
-		dataGasPrice, err := misc.GetDataGasPrice(*st.evm.Context().ExcessDataGas)
+		blobGasPrice, err := misc.GetBlobGasPrice(*st.evm.Context().ExcessBlobGas)
 		if err != nil {
 			return err
 		}
-		_, overflow = dgval.MulOverflow(dataGasPrice, new(uint256.Int).SetUint64(st.dataGasUsed()))
+		_, overflow = dgval.MulOverflow(blobGasPrice, new(uint256.Int).SetUint64(st.msg.BlobGas()))
 		if overflow {
-			return fmt.Errorf("%w: overflow converting datagas: %v", ErrInsufficientFunds, dgval)
+			return fmt.Errorf("%w: overflow converting blob gas: %v", ErrInsufficientFunds, dgval)
+		}
+		if err := st.gp.SubBlobGas(st.msg.BlobGas()); err != nil {
+			return err
 		}
 	}
 
@@ -251,10 +251,6 @@ func (st *StateTransition) buyGas(gasBailout bool) error {
 	}
 	st.gas += st.msg.Gas()
 	st.initialGas = st.msg.Gas()
-
-	if err := st.gp.SubDataGas(dataGasUsed); err != nil {
-		return err
-	}
 
 	if subBalance {
 		st.state.SubBalance(st.msg.From(), mgval)
@@ -310,19 +306,19 @@ func (st *StateTransition) preCheck(gasBailout bool) error {
 			}
 		}
 	}
-	if st.dataGasUsed() > 0 && st.evm.ChainRules().IsCancun {
-		if st.evm.Context().ExcessDataGas == nil {
-			return fmt.Errorf("%w: Cancun is active but ExcessDataGas is nil", ErrInternalFailure)
+	if st.msg.BlobGas() > 0 && st.evm.ChainRules().IsCancun {
+		if st.evm.Context().ExcessBlobGas == nil {
+			return fmt.Errorf("%w: Cancun is active but ExcessBlobGas is nil", ErrInternalFailure)
 		}
-		dataGasPrice, err := misc.GetDataGasPrice(*st.evm.Context().ExcessDataGas)
+		blobGasPrice, err := misc.GetBlobGasPrice(*st.evm.Context().ExcessBlobGas)
 		if err != nil {
 			return err
 		}
-		maxFeePerDataGas := st.msg.MaxFeePerDataGas()
-		if dataGasPrice.Cmp(maxFeePerDataGas) > 0 {
-			return fmt.Errorf("%w: address %v, maxFeePerDataGas: %v dataGasPrice: %v, excessDataGas: %v",
-				ErrMaxFeePerDataGas,
-				st.msg.From().Hex(), st.msg.MaxFeePerDataGas(), dataGasPrice, st.evm.Context().ExcessDataGas)
+		maxFeePerBlobGas := st.msg.MaxFeePerBlobGas()
+		if blobGasPrice.Cmp(maxFeePerBlobGas) > 0 {
+			return fmt.Errorf("%w: address %v, maxFeePerBlobGas: %v blobGasPrice: %v, excessBlobGas: %v",
+				ErrMaxFeePerBlobGas,
+				st.msg.From().Hex(), st.msg.MaxFeePerBlobGas(), blobGasPrice, st.evm.Context().ExcessBlobGas)
 		}
 	}
 
@@ -468,10 +464,9 @@ func (st *StateTransition) TransitionDb(refunds bool, gasBailout bool) (*Executi
 	}
 
 	return &ExecutionResult{
-		UsedGas:     st.gasUsed(),
-		UsedDataGas: st.dataGasUsed(),
-		Err:         vmerr,
-		ReturnData:  ret,
+		UsedGas:    st.gasUsed(),
+		Err:        vmerr,
+		ReturnData: ret,
 	}, nil
 }
 
@@ -495,8 +490,4 @@ func (st *StateTransition) refundGas(refundQuotient uint64) {
 // gasUsed returns the amount of gas used up by the state transition.
 func (st *StateTransition) gasUsed() uint64 {
 	return st.initialGas - st.gas
-}
-
-func (st *StateTransition) dataGasUsed() uint64 {
-	return misc.GetDataGasUsed(len(st.msg.DataHashes()))
 }

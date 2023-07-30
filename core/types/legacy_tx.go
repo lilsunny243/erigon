@@ -36,17 +36,12 @@ import (
 type CommonTx struct {
 	TransactionMisc
 
-	ChainID *uint256.Int
 	Nonce   uint64             // nonce of sender account
 	Gas     uint64             // gas limit
 	To      *libcommon.Address `rlp:"nil"` // nil means contract creation
 	Value   *uint256.Int       // wei amount
 	Data    []byte             // contract invocation input data
 	V, R, S uint256.Int        // signature values
-}
-
-func (ct CommonTx) GetChainID() *uint256.Int {
-	return ct.ChainID
 }
 
 func (ct CommonTx) GetNonce() uint64 {
@@ -57,7 +52,7 @@ func (ct CommonTx) GetTo() *libcommon.Address {
 	return ct.To
 }
 
-func (ct CommonTx) GetDataGas() uint64 {
+func (ct CommonTx) GetBlobGas() uint64 {
 	return 0
 }
 
@@ -229,7 +224,7 @@ func (tx LegacyTx) payloadSize() (payloadSize int, nonceLen, gasLen int) {
 		}
 	default:
 		if len(tx.Data) >= 56 {
-			payloadSize += (bits.Len(uint(len(tx.Data))) + 7) / 8
+			payloadSize += libcommon.BitLenToByteLen(bits.Len(uint(len(tx.Data))))
 		}
 		payloadSize += len(tx.Data)
 	}

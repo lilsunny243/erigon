@@ -20,6 +20,7 @@ import (
 	"errors"
 
 	"github.com/holiman/uint256"
+
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/math"
 
@@ -63,7 +64,8 @@ func memoryGasCost(mem *Memory, newMemSize uint64) (uint64, error) {
 // as argument:
 // CALLDATACOPY (stack position 2)
 // CODECOPY (stack position 2)
-// EXTCODECOPY (stack poition 3)
+// MCOPY (stack position 2)
+// EXTCODECOPY (stack position 3)
 // RETURNDATACOPY (stack position 2)
 func memoryCopierGas(stackpos int) gasFunc {
 	return func(_ VMInterpreter, contract *Contract, stack *stack.Stack, mem *Memory, memorySize uint64) (uint64, error) {
@@ -92,6 +94,7 @@ func memoryCopierGas(stackpos int) gasFunc {
 var (
 	gasCallDataCopy   = memoryCopierGas(2)
 	gasCodeCopy       = memoryCopierGas(2)
+	gasMcopy          = memoryCopierGas(2)
 	gasExtCodeCopy    = memoryCopierGas(3)
 	gasReturnDataCopy = memoryCopierGas(2)
 )
@@ -346,7 +349,7 @@ func gasCreate2Eip3860(_ VMInterpreter, contract *Contract, stack *stack.Stack, 
 }
 
 func gasExpFrontier(_ VMInterpreter, contract *Contract, stack *stack.Stack, mem *Memory, memorySize uint64) (uint64, error) {
-	expByteLen := uint64((stack.Data[stack.Len()-2].BitLen() + 7) / 8)
+	expByteLen := uint64(libcommon.BitLenToByteLen(stack.Data[stack.Len()-2].BitLen()))
 
 	var (
 		gas      = expByteLen * params.ExpByteFrontier // no overflow check required. Max is 256 * ExpByte gas
@@ -359,7 +362,7 @@ func gasExpFrontier(_ VMInterpreter, contract *Contract, stack *stack.Stack, mem
 }
 
 func gasExpEIP160(_ VMInterpreter, contract *Contract, stack *stack.Stack, mem *Memory, memorySize uint64) (uint64, error) {
-	expByteLen := uint64((stack.Data[stack.Len()-2].BitLen() + 7) / 8)
+	expByteLen := uint64(libcommon.BitLenToByteLen(stack.Data[stack.Len()-2].BitLen()))
 
 	var (
 		gas      = expByteLen * params.ExpByteEIP160 // no overflow check required. Max is 256 * ExpByte gas

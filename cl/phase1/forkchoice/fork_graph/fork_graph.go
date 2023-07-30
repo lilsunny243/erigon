@@ -6,7 +6,7 @@ import (
 	"github.com/ledgerwatch/erigon/cl/cltypes"
 	"github.com/ledgerwatch/erigon/cl/cltypes/solid"
 	"github.com/ledgerwatch/erigon/cl/phase1/core/state"
-	"github.com/ledgerwatch/erigon/cl/phase1/core/transition"
+	"github.com/ledgerwatch/erigon/cl/transition"
 	"github.com/ledgerwatch/log/v3"
 	"golang.org/x/exp/slices"
 )
@@ -39,13 +39,13 @@ const snapshotStateEverySlot = 64
 // each edge is the path described as (prevBlockRoot, currBlockRoot). if we want to go forward we use blocks.
 type ForkGraph struct {
 	// Alternate beacon states
-	currentReferenceState *state.BeaconState
-	nextReferenceState    *state.BeaconState
+	currentReferenceState *state.CachingBeaconState
+	nextReferenceState    *state.CachingBeaconState
 	blocks                map[libcommon.Hash]*cltypes.SignedBeaconBlock // set of blocks
 	headers               map[libcommon.Hash]*cltypes.BeaconBlockHeader // set of headers
 	badBlocks             map[libcommon.Hash]struct{}                   // blocks that are invalid and that leads to automatic fail of extension.
 	// current state data
-	currentState          *state.BeaconState
+	currentState          *state.CachingBeaconState
 	currentStateBlockRoot libcommon.Hash
 	// childrens maps each block roots to its children block roots
 	childrens map[libcommon.Hash][]libcommon.Hash
@@ -66,7 +66,7 @@ func (f *ForkGraph) AnchorSlot() uint64 {
 }
 
 // Initialize fork graph with a new state
-func New(anchorState *state.BeaconState, enabledPruning bool) *ForkGraph {
+func New(anchorState *state.CachingBeaconState, enabledPruning bool) *ForkGraph {
 	farthestExtendingPath := make(map[libcommon.Hash]bool)
 	anchorRoot, err := anchorState.BlockRoot()
 	if err != nil {
@@ -111,7 +111,7 @@ func New(anchorState *state.BeaconState, enabledPruning bool) *ForkGraph {
 }
 
 // Add a new node and edge to the graph
-func (f *ForkGraph) AddChainSegment(signedBlock *cltypes.SignedBeaconBlock, fullValidation bool) (*state.BeaconState, ChainSegmentInsertionResult, error) {
+func (f *ForkGraph) AddChainSegment(signedBlock *cltypes.SignedBeaconBlock, fullValidation bool) (*state.CachingBeaconState, ChainSegmentInsertionResult, error) {
 	block := signedBlock.Block
 	blockRoot, err := block.HashSSZ()
 	if err != nil {
@@ -149,17 +149,16 @@ func (f *ForkGraph) AddChainSegment(signedBlock *cltypes.SignedBeaconBlock, full
 	}
 
 	// Execute the state
-	if err := transition.TransitionState(newState, signedBlock, fullValidation); err != nil {
+	if invalidBlockErr := transition.TransitionState(newState, signedBlock, fullValidation); invalidBlockErr != nil {
 		// Add block to list of invalid blocks
-		log.Debug("Invalid beacon block", "reason", err)
+		log.Debug("Invalid beacon block", "reason", invalidBlockErr)
 		f.badBlocks[blockRoot] = struct{}{}
-		f.currentReferenceState.CopyInto(f.currentState)
-		err2 := err
-		f.currentStateBlockRoot, err = f.currentReferenceState.BlockRoot()
+		f.nextReferenceState.CopyInto(f.currentState)
+		f.currentStateBlockRoot, err = f.nextReferenceState.BlockRoot()
 		if err != nil {
 			log.Error("[Caplin] Could not recover from invalid block")
 		}
-		return nil, InvalidBlock, err2
+		return nil, InvalidBlock, invalidBlockErr
 	}
 
 	f.blocks[blockRoot] = signedBlock
@@ -210,7 +209,7 @@ func (f *ForkGraph) getBlock(blockRoot libcommon.Hash) (*cltypes.SignedBeaconBlo
 	return obj, has
 }
 
-func (f *ForkGraph) GetState(blockRoot libcommon.Hash, alwaysCopy bool) (*state.BeaconState, bool, error) {
+func (f *ForkGraph) GetState(blockRoot libcommon.Hash, alwaysCopy bool) (*state.CachingBeaconState, bool, error) {
 	// collect all blocks beetwen greatest extending node path and block.
 	blocksInTheWay := []*cltypes.SignedBeaconBlock{}
 	// Use the parent root as a reverse iterator.
@@ -236,7 +235,7 @@ func (f *ForkGraph) GetState(blockRoot libcommon.Hash, alwaysCopy bool) (*state.
 		currentIteratorRoot = block.Block.ParentRoot
 	}
 
-	var copyReferencedState *state.BeaconState
+	var copyReferencedState *state.CachingBeaconState
 	didLongRecconnection := currentIteratorRoot == reconnectionRootLong && reconnectionRootLong != reconnectionRootShort
 	if f.currentStateBlockRoot == blockRoot {
 		if alwaysCopy {
@@ -290,6 +289,10 @@ func (f *ForkGraph) GetCurrentJustifiedCheckpoint(blockRoot libcommon.Hash) (sol
 func (f *ForkGraph) GetFinalizedCheckpoint(blockRoot libcommon.Hash) (solid.Checkpoint, bool) {
 	obj, has := f.finalizedCheckpoints[blockRoot]
 	return obj, has
+}
+
+func (f *ForkGraph) MarkHeaderAsInvalid(blockRoot libcommon.Hash) {
+	f.badBlocks[blockRoot] = struct{}{}
 }
 
 func (f *ForkGraph) removeOldData() (err error) {

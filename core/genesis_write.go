@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"embed"
 	"encoding/binary"
 	"encoding/json"
@@ -27,15 +28,13 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/holiman/uint256"
-	"github.com/ledgerwatch/erigon-lib/kv/kvcfg"
-	"github.com/ledgerwatch/erigon/core/rawdb/blockio"
-	"github.com/ledgerwatch/erigon/turbo/snapshotsync"
 	"github.com/ledgerwatch/log/v3"
 	"golang.org/x/exp/slices"
 
 	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/kv"
+	"github.com/ledgerwatch/erigon-lib/kv/kvcfg"
 	"github.com/ledgerwatch/erigon-lib/kv/mdbx"
 	"github.com/ledgerwatch/erigon-lib/kv/rawdbv3"
 
@@ -76,12 +75,7 @@ func CommitGenesisBlockWithOverride(db kv.RwDB, genesis *types.Genesis, override
 		return nil, nil, err
 	}
 	defer tx.Rollback()
-	histV3, err := kvcfg.HistoryV3.Enabled(tx)
-	if err != nil {
-		return nil, nil, err
-	}
-	blockWriter := blockio.NewBlockWriter(histV3)
-	c, b, err := WriteGenesisBlock(tx, genesis, overrideShanghaiTime, tmpDir, logger, blockWriter)
+	c, b, err := WriteGenesisBlock(tx, genesis, overrideShanghaiTime, tmpDir, logger)
 	if err != nil {
 		return c, b, err
 	}
@@ -92,7 +86,7 @@ func CommitGenesisBlockWithOverride(db kv.RwDB, genesis *types.Genesis, override
 	return c, b, nil
 }
 
-func WriteGenesisBlock(tx kv.RwTx, genesis *types.Genesis, overrideShanghaiTime *big.Int, tmpDir string, logger log.Logger, blockWriter *blockio.BlockWriter) (*chain.Config, *types.Block, error) {
+func WriteGenesisBlock(tx kv.RwTx, genesis *types.Genesis, overrideShanghaiTime *big.Int, tmpDir string, logger log.Logger) (*chain.Config, *types.Block, error) {
 	var storedBlock *types.Block
 	if genesis != nil && genesis.Config == nil {
 		return params.AllProtocolChanges, nil, types.ErrGenesisNoConfig
@@ -117,7 +111,7 @@ func WriteGenesisBlock(tx kv.RwTx, genesis *types.Genesis, overrideShanghaiTime 
 			custom = false
 		}
 		applyOverrides(genesis.Config)
-		block, _, err1 := write(tx, genesis, tmpDir, blockWriter)
+		block, _, err1 := write(tx, genesis, tmpDir)
 		if err1 != nil {
 			return genesis.Config, nil, err1
 		}
@@ -138,11 +132,10 @@ func WriteGenesisBlock(tx kv.RwTx, genesis *types.Genesis, overrideShanghaiTime 
 			return genesis.Config, block, &types.GenesisMismatchError{Stored: storedHash, New: hash}
 		}
 	}
-	blockReader := snapshotsync.NewBlockReader(snapshotsync.NewRoSnapshots(ethconfig.Snapshot{Enabled: false}, "", log.New()))
 	number := rawdb.ReadHeaderNumber(tx, storedHash)
 	if number != nil {
 		var err error
-		storedBlock, _, err = blockReader.BlockWithSenders(context.Background(), tx, storedHash, *number)
+		storedBlock, _, err = rawdb.ReadBlockWithSenders(tx, storedHash, *number)
 		if err != nil {
 			return genesis.Config, nil, err
 		}
@@ -192,6 +185,11 @@ func WriteGenesisState(g *types.Genesis, tx kv.RwTx, tmpDir string) (*types.Bloc
 	if err != nil {
 		return nil, nil, err
 	}
+	histV3, err := kvcfg.HistoryV3.Enabled(tx)
+	if err != nil {
+		panic(err)
+	}
+
 	var stateWriter state.StateWriter
 	if ethconfig.EnableHistoryV4InTest {
 		panic("implement me")
@@ -219,12 +217,14 @@ func WriteGenesisState(g *types.Genesis, tx kv.RwTx, tmpDir string) (*types.Bloc
 	if err := statedb.CommitBlock(&chain.Rules{}, stateWriter); err != nil {
 		return nil, statedb, fmt.Errorf("cannot write state: %w", err)
 	}
-	if csw, ok := stateWriter.(state.WriterWithChangeSets); ok {
-		if err := csw.WriteChangeSets(); err != nil {
-			return nil, statedb, fmt.Errorf("cannot write change sets: %w", err)
-		}
-		if err := csw.WriteHistory(); err != nil {
-			return nil, statedb, fmt.Errorf("cannot write history: %w", err)
+	if !histV3 {
+		if csw, ok := stateWriter.(state.WriterWithChangeSets); ok {
+			if err := csw.WriteChangeSets(); err != nil {
+				return nil, statedb, fmt.Errorf("cannot write change sets: %w", err)
+			}
+			if err := csw.WriteHistory(); err != nil {
+				return nil, statedb, fmt.Errorf("cannot write history: %w", err)
+			}
 		}
 	}
 	return block, statedb, nil
@@ -235,12 +235,7 @@ func MustCommitGenesis(g *types.Genesis, db kv.RwDB, tmpDir string) *types.Block
 		panic(err)
 	}
 	defer tx.Rollback()
-	histV3, err := kvcfg.HistoryV3.Enabled(tx)
-	if err != nil {
-		panic(err)
-	}
-	blockWriter := blockio.NewBlockWriter(histV3)
-	block, _, err := write(tx, g, tmpDir, blockWriter)
+	block, _, err := write(tx, g, tmpDir)
 	if err != nil {
 		panic(err)
 	}
@@ -253,7 +248,7 @@ func MustCommitGenesis(g *types.Genesis, db kv.RwDB, tmpDir string) *types.Block
 
 // Write writes the block and state of a genesis specification to the database.
 // The block is committed as the canonical head block.
-func write(tx kv.RwTx, g *types.Genesis, tmpDir string, blockWriter *blockio.BlockWriter) (*types.Block, *state.IntraBlockState, error) {
+func write(tx kv.RwTx, g *types.Genesis, tmpDir string) (*types.Block, *state.IntraBlockState, error) {
 	block, statedb, err2 := WriteGenesisState(g, tx, tmpDir)
 	if err2 != nil {
 		return block, statedb, err2
@@ -266,10 +261,10 @@ func write(tx kv.RwTx, g *types.Genesis, tmpDir string, blockWriter *blockio.Blo
 		return nil, nil, err
 	}
 
-	if err := blockWriter.WriteBlock(tx, block); err != nil {
+	if err := rawdb.WriteBlock(tx, block); err != nil {
 		return nil, nil, err
 	}
-	if err := blockWriter.WriteTd(tx, block.Hash(), block.NumberU64(), g.Difficulty); err != nil {
+	if err := rawdb.WriteTd(tx, block.Hash(), block.NumberU64(), g.Difficulty); err != nil {
 		return nil, nil, err
 	}
 	if err := rawdbv3.TxNums.WriteForGenesis(tx, 1); err != nil {
@@ -442,6 +437,13 @@ func ChiadoGenesisBlock() *types.Genesis {
 var DevnetSignPrivateKey, _ = crypto.HexToECDSA("26e86e45f6fc45ec6e2ecd128cec80fa1d1505e5507dcd2ae58c3130a7a97b48")
 var DevnetEtherbase = libcommon.HexToAddress("67b1d87101671b127f5f8714789c7192f7ad340e")
 
+// DevnetSignKey is defined like this to allow the devnet process to pre-allocate keys
+// for nodes and then pass the address via --miner.etherbase - the function will be called
+// to retieve the mining key
+var DevnetSignKey = func(address libcommon.Address) *ecdsa.PrivateKey {
+	return DevnetSignPrivateKey
+}
+
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.
 func DeveloperGenesisBlock(period uint64, faucet libcommon.Address) *types.Genesis {
 	// Override the default period to the user requested one
@@ -475,8 +477,8 @@ func GenesisToBlock(g *types.Genesis, tmpDir string) (*types.Block, *state.Intra
 		MixDigest:     g.Mixhash,
 		Coinbase:      g.Coinbase,
 		BaseFee:       g.BaseFee,
-		DataGasUsed:   g.DataGasUsed,
-		ExcessDataGas: g.ExcessDataGas,
+		BlobGasUsed:   g.BlobGasUsed,
+		ExcessBlobGas: g.ExcessBlobGas,
 		AuRaStep:      g.AuRaStep,
 		AuRaSeal:      g.AuRaSeal,
 	}

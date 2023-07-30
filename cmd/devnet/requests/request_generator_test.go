@@ -1,14 +1,16 @@
 package requests
 
 import (
+	"math/big"
 	"testing"
 
+	ethereum "github.com/ledgerwatch/erigon"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/stretchr/testify/require"
 )
 
-func MockRequestGenerator(reqId int) *RequestGenerator {
-	return &RequestGenerator{
+func MockRequestGenerator(reqId int) *requestGenerator {
+	return &requestGenerator{
 		reqID:  reqId,
 		client: nil,
 	}
@@ -132,7 +134,11 @@ func TestRequestGenerator_GetLogs(t *testing.T) {
 
 	for _, testCase := range testCases {
 		reqGen := MockRequestGenerator(testCase.reqId)
-		_, got := reqGen.getLogs(testCase.fromBlock, testCase.toBlock, testCase.address)
+		_, got := reqGen.getLogs(ethereum.FilterQuery{
+			FromBlock: big.NewInt(int64(testCase.fromBlock)),
+			ToBlock:   big.NewInt(int64(testCase.toBlock)),
+			Addresses: []libcommon.Address{testCase.address},
+		})
 		require.EqualValues(t, testCase.expected, got)
 	}
 }
@@ -255,23 +261,6 @@ func TestParseResponse(t *testing.T) {
 
 	for _, testCase := range testCases {
 		got, _ := parseResponse(testCase.input)
-		require.EqualValues(t, testCase.expected, got)
-	}
-}
-
-func TestHexToInt(t *testing.T) {
-	testCases := []struct {
-		hexStr   string
-		expected uint64
-	}{
-		{"0x0", 0},
-		{"0x32424", 205860},
-		{"0x200", 512},
-		{"0x39", 57},
-	}
-
-	for _, testCase := range testCases {
-		got := HexToInt(testCase.hexStr)
 		require.EqualValues(t, testCase.expected, got)
 	}
 }

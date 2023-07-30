@@ -29,8 +29,8 @@ func StateReceiver() abi.ABI {
 type GenesisContractsClient struct {
 	validatorSetABI       abi.ABI
 	stateReceiverABI      abi.ABI
-	ValidatorContract     string
-	StateReceiverContract string
+	ValidatorContract     libcommon.Address
+	StateReceiverContract libcommon.Address
 	chainConfig           *chain.Config
 	logger                log.Logger
 }
@@ -49,17 +49,14 @@ func NewGenesisContractsClient(
 	return &GenesisContractsClient{
 		validatorSetABI:       ValidatorSet(),
 		stateReceiverABI:      StateReceiver(),
-		ValidatorContract:     validatorContract,
-		StateReceiverContract: stateReceiverContract,
+		ValidatorContract:     libcommon.HexToAddress(validatorContract),
+		StateReceiverContract: libcommon.HexToAddress(stateReceiverContract),
 		chainConfig:           chainConfig,
 		logger:                logger,
 	}
 }
 
-func (gc *GenesisContractsClient) CommitState(
-	event *clerk.EventRecordWithTime,
-	syscall consensus.SystemCall,
-) error {
+func (gc *GenesisContractsClient) CommitState(event *clerk.EventRecordWithTime, syscall consensus.SystemCall) error {
 	eventRecord := event.BuildEventRecord()
 
 	recordBytes, err := rlp.EncodeToBytes(eventRecord)
@@ -77,17 +74,13 @@ func (gc *GenesisContractsClient) CommitState(
 		return err
 	}
 
-	gc.logger.Trace("→ committing new state", "eventRecord", event.String())
-	_, err = syscall(libcommon.HexToAddress(gc.StateReceiverContract), data)
+	gc.logger.Info("→ committing new state", "eventRecord", event.String())
+	_, err = syscall(gc.StateReceiverContract, data)
 
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
-func (gc *GenesisContractsClient) LastStateId(syscall consensus.SystemCall,
-) (*big.Int, error) {
+func (gc *GenesisContractsClient) LastStateId(syscall consensus.SystemCall) (*big.Int, error) {
 	const method = "lastStateId"
 
 	data, err := gc.stateReceiverABI.Pack(method)
@@ -96,7 +89,7 @@ func (gc *GenesisContractsClient) LastStateId(syscall consensus.SystemCall,
 		return nil, err
 	}
 
-	result, err := syscall(libcommon.HexToAddress(gc.StateReceiverContract), data)
+	result, err := syscall(gc.StateReceiverContract, data)
 	if err != nil {
 		return nil, err
 	}

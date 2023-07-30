@@ -1,6 +1,8 @@
 package flags
 
-import "github.com/urfave/cli/v2"
+import (
+	"github.com/urfave/cli/v2"
+)
 
 var (
 	SentinelDiscoveryPort = cli.IntFlag{
@@ -28,6 +30,31 @@ var (
 		Usage: "sets the lightclient server host addr",
 		Value: "localhost",
 	}
+	NoBeaconApi = cli.BoolFlag{
+		Name:  "no-beacon-api",
+		Usage: "turn off the beacon api",
+		Value: false,
+	}
+	BeaconApiReadTimeout = cli.Uint64Flag{
+		Name:  "beacon.api.read.timeout",
+		Usage: "Sets the seconds for a read time out in the beacon api",
+		Value: 5,
+	}
+	BeaconApiWriteTimeout = cli.Uint64Flag{
+		Name:  "beacon.api.write.timeout",
+		Usage: "Sets the seconds for a write time out in the beacon api",
+		Value: 5,
+	}
+	BeaconApiAddr = cli.StringFlag{
+		Name:  "beacon.api.addr",
+		Usage: "sets the host to listen for beacon api requests",
+		Value: "localhost",
+	}
+	BeaconApiPort = cli.UintFlag{
+		Name:  "beacon.api.port",
+		Usage: "sets the port to listen for beacon api requests",
+		Value: 5555,
+	}
 	BootnodesFlag = cli.StringFlag{
 		Name:  "sentinel.bootnodes",
 		Usage: "Comma separated enode URLs for P2P discovery bootstrap",
@@ -53,6 +80,11 @@ var (
 		Usage: "turn off or on the lightclient finding peers",
 		Value: false,
 	}
+	LocalDiscovery = cli.BoolFlag{
+		Name:  "local-discovery",
+		Usage: "enable to also attempt to find peers over private ips. turning this on may cause issues with hosts such as hetzner",
+		Value: false,
+	}
 	ChaindataFlag = cli.StringFlag{
 		Name:  "chaindata",
 		Usage: "chaindata of database",
@@ -71,6 +103,26 @@ var (
 	ErigonPrivateApiFlag = cli.StringFlag{
 		Name:  "private.api.addr",
 		Usage: "connect to existing erigon instance",
+		Value: "",
+	}
+	RunEngineAPI = cli.BoolFlag{
+		Name:  "engine.api",
+		Usage: "Turns on engine communication (Needed for none Erigon ELs)",
+		Value: false,
+	}
+	EngineApiPortFlag = cli.UintFlag{
+		Name:  "engine.api.port",
+		Usage: "Sets engine API port",
+		Value: 8551,
+	}
+	EngineApiHostFlag = cli.StringFlag{
+		Name:  "engine.api.host",
+		Usage: "Sets the engine API host",
+		Value: "http://localhost",
+	}
+	JwtSecret = cli.StringFlag{
+		Name:  "engine.api.jwtsecret",
+		Usage: "Path to the token that ensures safe connection between CL and EL",
 		Value: "",
 	}
 	SentinelStaticPeersFlag = cli.StringFlag{

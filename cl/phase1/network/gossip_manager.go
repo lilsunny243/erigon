@@ -70,7 +70,7 @@ func (g *GossipManager) onRecv(data *sentinel.GossipData, l log.Ctx) error {
 		if block.Block.Slot+maxGossipSlotThreshold < currentSlotByTime {
 			return nil
 		}
-		if block.Block.Slot+maxGossipSlotThreshold == currentSlotByTime {
+		if block.Block.Slot == currentSlotByTime {
 			if _, err := g.sentinel.PublishGossip(g.ctx, data); err != nil {
 				log.Debug("failed publish gossip", "err", err)
 			}
@@ -129,11 +129,13 @@ func (g *GossipManager) onRecv(data *sentinel.GossipData, l log.Ctx) error {
 		// Do forkchoice if possible
 		if g.forkChoice.Engine() != nil {
 			finalizedCheckpoint := g.forkChoice.FinalizedCheckpoint()
+			log.Info("Caplin is sending forkchoice")
 			// Run forkchoice
 			if err := g.forkChoice.Engine().ForkChoiceUpdate(
 				g.forkChoice.GetEth1Hash(finalizedCheckpoint.BlockRoot()),
 				g.forkChoice.GetEth1Hash(headRoot),
 			); err != nil {
+				log.Warn("Could not set forkchoice", "err", err)
 				l["at"] = "sending forkchoice"
 				return err
 			}

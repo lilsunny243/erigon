@@ -97,7 +97,7 @@ func testPrestateDiffTracer(tracerName string, dirPath string, t *testing.T) {
 			}
 			// Configure a blockchain with the given prestate
 			var (
-				signer    = types.MakeSigner(test.Genesis.Config, uint64(test.Context.Number))
+				signer    = types.MakeSigner(test.Genesis.Config, uint64(test.Context.Number), uint64(test.Context.Time))
 				origin, _ = signer.Sender(tx)
 				txContext = evmtypes.TxContext{
 					Origin:   origin,
@@ -131,7 +131,7 @@ func testPrestateDiffTracer(tracerName string, dirPath string, t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to prepare transaction for tracing: %v", err)
 			}
-			st := core.NewStateTransition(evm, msg, new(core.GasPool).AddGas(tx.GetGas()).AddDataGas(tx.GetDataGas()))
+			st := core.NewStateTransition(evm, msg, new(core.GasPool).AddGas(tx.GetGas()).AddBlobGas(tx.GetBlobGas()))
 			if _, err = st.TransitionDb(true /* refunds */, false /* gasBailout */); err != nil {
 				t.Fatalf("failed to execute transaction: %v", err)
 			}
