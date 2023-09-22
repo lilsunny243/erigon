@@ -15,6 +15,7 @@ import (
 	"github.com/ledgerwatch/erigon/consensus/bor/clerk"
 	"github.com/ledgerwatch/erigon/consensus/bor/contract"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/checkpoint"
+	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/milestone"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/span"
 	"github.com/ledgerwatch/erigon/consensus/bor/valset"
 	"github.com/ledgerwatch/erigon/core"
@@ -24,7 +25,7 @@ import (
 	"github.com/ledgerwatch/erigon/ethdb/prune"
 	"github.com/ledgerwatch/erigon/params"
 	"github.com/ledgerwatch/erigon/rlp"
-	"github.com/ledgerwatch/erigon/turbo/stages"
+	"github.com/ledgerwatch/erigon/turbo/stages/mock"
 	"github.com/ledgerwatch/log/v3"
 )
 
@@ -102,12 +103,32 @@ func (h test_heimdall) FetchCheckpointCount(ctx context.Context) (int64, error) 
 	return 0, fmt.Errorf("TODO")
 }
 
+func (h test_heimdall) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+	return nil, fmt.Errorf("TODO")
+}
+
+func (h test_heimdall) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	return 0, fmt.Errorf("TODO")
+}
+
+func (h test_heimdall) FetchNoAckMilestone(ctx context.Context, milestoneID string) error {
+	return fmt.Errorf("TODO")
+}
+
+func (h test_heimdall) FetchLastNoAckMilestone(ctx context.Context) (string, error) {
+	return "", fmt.Errorf("TODO")
+}
+
+func (h test_heimdall) FetchMilestoneID(ctx context.Context, milestoneID string) error {
+	return fmt.Errorf("TODO")
+}
+
 func (h test_heimdall) Close() {}
 
 type test_genesisContract struct {
 }
 
-func (g test_genesisContract) CommitState(event *clerk.EventRecordWithTime, syscall consensus.SystemCall) error {
+func (g test_genesisContract) CommitState(event rlp.RawValue, syscall consensus.SystemCall) error {
 	return nil
 }
 
@@ -167,7 +188,7 @@ func (c *spanner) CommitSpan(heimdallSpan span.HeimdallSpan, syscall consensus.S
 }
 
 type validator struct {
-	*stages.MockSentry
+	*mock.MockSentry
 	heimdall *test_heimdall
 	blocks   map[uint64]*types.Block
 }
@@ -179,13 +200,11 @@ func (v validator) generateChain(length int) (*core.ChainPack, error) {
 }
 
 func (v validator) IsProposer(block *types.Block) (bool, error) {
-	return v.Engine.(*bor.Bor).IsProposer(headerReader{v}, block)
+	return v.Engine.(*bor.Bor).IsProposer(block.Header())
 }
 
 func (v validator) sealBlocks(blocks []*types.Block) ([]*types.Block, error) {
 	sealedBlocks := make([]*types.Block, 0, len(blocks))
-
-	sealResults := make(chan *types.Block)
 
 	hr := headerReader{v}
 
@@ -199,6 +218,8 @@ func (v validator) sealBlocks(blocks []*types.Block) ([]*types.Block, error) {
 		if parent := hr.GetHeaderByNumber(header.Number.Uint64() - 1); parent != nil {
 			header.ParentHash = parent.Hash()
 		}
+
+		sealResults := make(chan *types.Block, 1)
 
 		if err := v.Engine.Seal(hr, block, sealResults, nil); err != nil {
 			return nil, err
@@ -230,6 +251,7 @@ func newValidator(t *testing.T, heimdall *test_heimdall, blocks map[uint64]*type
 	bor := bor.New(
 		heimdall.chainConfig,
 		memdb.New(""),
+		nil, /* blockReader */
 		&spanner{span.NewChainSpanner(contract.ValidatorSet(), heimdall.chainConfig, false, logger), span.Span{}},
 		heimdall,
 		test_genesisContract{},
@@ -263,8 +285,9 @@ func newValidator(t *testing.T, heimdall *test_heimdall, blocks map[uint64]*type
 		return crypto.Sign(crypto.Keccak256(message), validatorKey)
 	})
 
+	checkStateRoot := true
 	return validator{
-		stages.MockWithEverything(t, &types.Genesis{Config: heimdall.chainConfig}, validatorKey, prune.DefaultMode, bor, 1024, false, false),
+		mock.MockWithEverything(t, &types.Genesis{Config: heimdall.chainConfig}, validatorKey, prune.DefaultMode, bor, 1024, false, false, checkStateRoot),
 		heimdall,
 		blocks,
 	}

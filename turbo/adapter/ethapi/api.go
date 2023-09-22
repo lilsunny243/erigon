@@ -47,6 +47,7 @@ type CallArgs struct {
 	Value                *hexutil.Big       `json:"value"`
 	Nonce                *hexutil.Uint64    `json:"nonce"`
 	Data                 *hexutility.Bytes  `json:"data"`
+	Input                *hexutility.Bytes  `json:"input"`
 	AccessList           *types2.AccessList `json:"accessList"`
 	ChainID              *hexutil.Big       `json:"chainId,omitempty"`
 }
@@ -142,7 +143,9 @@ func (args *CallArgs) ToMessage(globalGasCap uint64, baseFee *uint256.Int) (type
 		}
 	}
 	var data []byte
-	if args.Data != nil {
+	if args.Input != nil {
+		data = *args.Input
+	} else if args.Data != nil {
 		data = *args.Data
 	}
 	var accessList types2.AccessList
@@ -291,6 +294,9 @@ func RPCMarshalHeader(head *types.Header) map[string]interface{} {
 	}
 	if head.ExcessBlobGas != nil {
 		result["excessBlobGas"] = (*hexutil.Uint64)(head.ExcessBlobGas)
+	}
+	if head.ParentBeaconBlockRoot != nil {
+		result["parentBeaconBlockRoot"] = head.ParentBeaconBlockRoot
 	}
 
 	return result
@@ -461,7 +467,7 @@ func newRPCTransaction(tx types.Transaction, blockHash libcommon.Hash, blockNumb
 		// if the transaction has been mined, compute the effective gas price
 		result.GasPrice = computeGasPrice(tx, blockHash, baseFee)
 		result.MaxFeePerBlobGas = (*hexutil.Big)(t.MaxFeePerBlobGas.ToBig())
-		result.BlobVersionedHashes = t.GetDataHashes()
+		result.BlobVersionedHashes = t.GetBlobHashes()
 	}
 	signer := types.LatestSignerForChainID(chainId.ToBig())
 	var err error

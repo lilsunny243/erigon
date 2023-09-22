@@ -26,6 +26,7 @@ import (
 
 	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
+	libkzg "github.com/ledgerwatch/erigon-lib/crypto/kzg"
 
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/math"
@@ -33,7 +34,7 @@ import (
 	"github.com/ledgerwatch/erigon/crypto/blake2b"
 	"github.com/ledgerwatch/erigon/crypto/bls12381"
 	"github.com/ledgerwatch/erigon/crypto/bn256"
-	"github.com/ledgerwatch/erigon/crypto/kzg"
+
 	"github.com/ledgerwatch/erigon/params"
 
 	//lint:ignore SA1019 Needed for precompile
@@ -172,7 +173,8 @@ func ActivePrecompiles(rules *chain.Rules) []libcommon.Address {
 // - the returned bytes,
 // - the _remaining_ gas,
 // - any error that occurred
-func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uint64) (ret []byte, remainingGas uint64, err error) {
+func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uint64,
+) (ret []byte, remainingGas uint64, err error) {
 	gasCost := p.RequiredGas(input)
 	if suppliedGas < gasCost {
 		return nil, 0, ErrOutOfGas
@@ -1094,5 +1096,5 @@ func (c *pointEvaluation) RequiredGas(input []byte) uint64 {
 }
 
 func (c *pointEvaluation) Run(input []byte) ([]byte, error) {
-	return kzg.PointEvaluationPrecompile(input)
+	return libkzg.PointEvaluationPrecompile(input)
 }

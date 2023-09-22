@@ -42,7 +42,7 @@ type TxContext struct {
 	TxHash     common.Hash
 	Origin     common.Address // Provides information for ORIGIN
 	GasPrice   *uint256.Int   // Provides information for GASPRICE
-	DataHashes []common.Hash  // Provides versioned data hashes for DATAHASH
+	BlobHashes []common.Hash  // Provides versioned blob hashes for BLOBHASH
 }
 
 type (
@@ -84,6 +84,7 @@ type IntraBlockState interface {
 
 	Selfdestruct(common.Address) bool
 	HasSelfdestructed(common.Address) bool
+	Selfdestruct6780(common.Address)
 
 	// Exist reports whether the given account exists in state.
 	// Notably this should also return true for suicided accounts.

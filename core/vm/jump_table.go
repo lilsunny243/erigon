@@ -103,6 +103,8 @@ func newCancunInstructionSet() JumpTable {
 	enable1153(&instructionSet) // Transient storage opcodes
 	enable4844(&instructionSet) // BLOBHASH opcode
 	enable5656(&instructionSet) // MCOPY opcode
+	enable6780(&instructionSet) // SELFDESTRUCT only in same transaction
+	enable7516(&instructionSet) // BLOBBASEFEE opcode
 	validateAndFillMaxStack(&instructionSet)
 	return instructionSet
 }

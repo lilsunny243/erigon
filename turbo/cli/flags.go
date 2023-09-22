@@ -201,12 +201,6 @@ var (
 		Usage: "How often transactions should be committed to the storage",
 		Value: txpoolcfg.DefaultConfig.CommitEvery,
 	}
-
-	ExperimentalConsensusSeparationFlag = cli.BoolFlag{
-		Name:  "experimental.modular",
-		Usage: "Enable consensus separation (experimental feauture)",
-		Value: false,
-	}
 )
 
 func ApplyFlagsForEthConfig(ctx *cli.Context, cfg *ethconfig.Config, logger log.Logger) {
@@ -221,7 +215,7 @@ func ApplyFlagsForEthConfig(ctx *cli.Context, cfg *ethconfig.Config, logger log.
 		ctx.Uint64(PruneReceiptBeforeFlag.Name),
 		ctx.Uint64(PruneTxIndexBeforeFlag.Name),
 		ctx.Uint64(PruneCallTracesBeforeFlag.Name),
-		utils.SplitAndTrim(ctx.String(ExperimentsFlag.Name)),
+		libcommon.CliString2Array(ctx.String(ExperimentsFlag.Name)),
 	)
 	if err != nil {
 		utils.Fatalf(fmt.Sprintf("error while parsing mode: %v", err))
@@ -251,8 +245,6 @@ func ApplyFlagsForEthConfig(ctx *cli.Context, cfg *ethconfig.Config, logger log.
 			utils.Fatalf("Invalid bodyCacheLimit provided: %v", err)
 		}
 	}
-
-	cfg.ExperimentalConsensusSeparation = ctx.Bool(ExperimentalConsensusSeparationFlag.Name)
 
 	if ctx.String(SyncLoopThrottleFlag.Name) != "" {
 		syncLoopThrottle, err := time.ParseDuration(ctx.String(SyncLoopThrottleFlag.Name))
@@ -378,10 +370,10 @@ func setEmbeddedRpcDaemon(ctx *cli.Context, cfg *nodecfg.Config, logger log.Logg
 		AuthRpcPort:              ctx.Int(utils.AuthRpcPort.Name),
 		JWTSecretPath:            jwtSecretPath,
 		TraceRequests:            ctx.Bool(utils.HTTPTraceFlag.Name),
-		HttpCORSDomain:           utils.SplitAndTrim(ctx.String(utils.HTTPCORSDomainFlag.Name)),
-		HttpVirtualHost:          utils.SplitAndTrim(ctx.String(utils.HTTPVirtualHostsFlag.Name)),
-		AuthRpcVirtualHost:       utils.SplitAndTrim(ctx.String(utils.AuthRpcVirtualHostsFlag.Name)),
-		API:                      utils.SplitAndTrim(apis),
+		HttpCORSDomain:           libcommon.CliString2Array(ctx.String(utils.HTTPCORSDomainFlag.Name)),
+		HttpVirtualHost:          libcommon.CliString2Array(ctx.String(utils.HTTPVirtualHostsFlag.Name)),
+		AuthRpcVirtualHost:       libcommon.CliString2Array(ctx.String(utils.AuthRpcVirtualHostsFlag.Name)),
+		API:                      libcommon.CliString2Array(apis),
 		HTTPTimeouts: rpccfg.HTTPTimeouts{
 			ReadTimeout:  ctx.Duration(HTTPReadTimeoutFlag.Name),
 			WriteTimeout: ctx.Duration(HTTPWriteTimeoutFlag.Name),

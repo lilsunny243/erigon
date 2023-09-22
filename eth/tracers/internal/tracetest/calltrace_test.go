@@ -28,9 +28,6 @@ import (
 	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/hexutility"
-	"github.com/ledgerwatch/erigon/turbo/stages"
-	"github.com/stretchr/testify/require"
-
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
 	"github.com/ledgerwatch/erigon/common/math"
@@ -40,12 +37,12 @@ import (
 	"github.com/ledgerwatch/erigon/core/vm/evmtypes"
 	"github.com/ledgerwatch/erigon/crypto"
 	"github.com/ledgerwatch/erigon/eth/tracers"
-	"github.com/ledgerwatch/erigon/params"
-	"github.com/ledgerwatch/erigon/tests"
-
-	// Force-load native and js packages, to trigger registration
 	_ "github.com/ledgerwatch/erigon/eth/tracers/js"
 	_ "github.com/ledgerwatch/erigon/eth/tracers/native"
+	"github.com/ledgerwatch/erigon/params"
+	"github.com/ledgerwatch/erigon/tests"
+	"github.com/ledgerwatch/erigon/turbo/stages/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type callContext struct {
@@ -58,6 +55,7 @@ type callContext struct {
 
 // callLog is the result of LOG opCode
 type callLog struct {
+	Index   uint64            `json:"index"`
 	Address libcommon.Address `json:"address"`
 	Topics  []libcommon.Hash  `json:"topics"`
 	Data    hexutility.Bytes  `json:"data"`
@@ -149,7 +147,7 @@ func testCallTracer(tracerName string, dirPath string, t *testing.T) {
 				}
 				rules = test.Genesis.Config.Rules(context.BlockNumber, context.Time)
 			)
-			m := stages.Mock(t)
+			m := mock.Mock(t)
 			dbTx, err := m.DB.BeginRw(m.Ctx)
 			require.NoError(t, err)
 			defer dbTx.Rollback()
@@ -256,7 +254,7 @@ func benchTracer(b *testing.B, tracerName string, test *callTracerTest) {
 		Difficulty:  (*big.Int)(test.Context.Difficulty),
 		GasLimit:    uint64(test.Context.GasLimit),
 	}
-	m := stages.Mock(b)
+	m := mock.Mock(b)
 	dbTx, err := m.DB.BeginRw(m.Ctx)
 	require.NoError(b, err)
 	defer dbTx.Rollback()
@@ -332,7 +330,7 @@ func TestZeroValueToNotExitCall(t *testing.T) {
 		},
 	}
 	rules := params.MainnetChainConfig.Rules(context.BlockNumber, context.Time)
-	m := stages.Mock(t)
+	m := mock.Mock(t)
 	dbTx, err := m.DB.BeginRw(m.Ctx)
 	require.NoError(t, err)
 	defer dbTx.Rollback()

@@ -17,7 +17,9 @@ var DefaultFlags = []cli.Flag{
 	&utils.TxPoolNoLocalsFlag,
 	&utils.TxPoolPriceLimitFlag,
 	&utils.TxPoolPriceBumpFlag,
+	&utils.TxPoolBlobPriceBumpFlag,
 	&utils.TxPoolAccountSlotsFlag,
+	&utils.TxPoolBlobSlotsFlag,
 	&utils.TxPoolGlobalSlotsFlag,
 	&utils.TxPoolGlobalBaseFeeSlotsFlag,
 	&utils.TxPoolAccountQueueFlag,
@@ -47,7 +49,6 @@ var DefaultFlags = []cli.Flag{
 	&StateStreamDisableFlag,
 	&SyncLoopThrottleFlag,
 	&BadBlockFlag,
-	&ExperimentalConsensusSeparationFlag,
 
 	&utils.HTTPEnabledFlag,
 	&utils.GraphQLEnabledFlag,
@@ -88,6 +89,7 @@ var DefaultFlags = []cli.Flag{
 	&utils.SnapStopFlag,
 	&utils.DbPageSizeFlag,
 	&utils.DbSizeLimitFlag,
+	&utils.ForcePartialCommitFlag,
 	&utils.TorrentPortFlag,
 	&utils.TorrentMaxPeersFlag,
 	&utils.TorrentConnsPerFileFlag,
@@ -134,7 +136,6 @@ var DefaultFlags = []cli.Flag{
 	&utils.MinerSigningKeyFileFlag,
 	&utils.SentryAddrFlag,
 	&utils.SentryLogPeerInfoFlag,
-	&utils.SentryDropUselessPeers,
 	&utils.DownloaderAddrFlag,
 	&utils.DisableIPV4,
 	&utils.DisableIPV6,
@@ -142,12 +143,14 @@ var DefaultFlags = []cli.Flag{
 	&utils.DownloaderVerifyFlag,
 	&HealthCheckFlag,
 	&utils.HeimdallURLFlag,
+	&utils.WebSeedsFlag,
 	&utils.WithoutHeimdallFlag,
 	&utils.HeimdallgRPCAddressFlag,
 	&utils.BorBlockPeriodFlag,
 	&utils.BorBlockSizeFlag,
+	&utils.WithHeimdallMilestones,
 	&utils.EthStatsURLFlag,
-	&utils.OverrideShanghaiTime,
+	&utils.OverrideCancunFlag,
 
 	&utils.ConfigFlag,
 
@@ -158,4 +161,6 @@ var DefaultFlags = []cli.Flag{
 	&utils.SentinelPortFlag,
 
 	&utils.OtsSearchMaxCapFlag,
+
+	&utils.TrustedSetupFile,
 }
