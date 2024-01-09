@@ -242,6 +242,9 @@ func (a *AggregatorV3) HasBackgroundFilesBuild() bool { return a.ps.Has() }
 func (a *AggregatorV3) BackgroundProgress() string    { return a.ps.String() }
 
 func (a *AggregatorV3) Files() (res []string) {
+	if a == nil {
+		return res
+	}
 	a.filesMutationLock.Lock()
 	defer a.filesMutationLock.Unlock()
 
@@ -656,6 +659,9 @@ func (a *AggregatorV3) integrateFiles(sf AggV3StaticFiles, txNumFrom, txNumTo ui
 }
 
 func (a *AggregatorV3) HasNewFrozenFiles() bool {
+	if a == nil {
+		return false
+	}
 	return a.needSaveFilesListInDB.CompareAndSwap(true, false)
 }
 
@@ -1295,6 +1301,7 @@ func (a *AggregatorV3) AddCodePrev(addr []byte, prev []byte) error {
 	return a.code.AddPrevValue(addr, nil, prev)
 }
 
+// nolint
 func (a *AggregatorV3) PutIdx(idx kv.InvertedIdx, key []byte) error {
 	switch idx {
 	case kv.TblTracesFromIdx:

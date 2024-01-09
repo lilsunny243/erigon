@@ -19,7 +19,6 @@ package txpool
 import (
 	"bytes"
 	"context"
-
 	// "crypto/rand"
 	"fmt"
 	"math"
@@ -53,7 +52,7 @@ func TestNonceFromAddress(t *testing.T) {
 
 	cfg := txpoolcfg.DefaultConfig
 	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
-	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, log.New())
+	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, nil, fixedgas.DefaultMaxBlobsPerBlock, log.New())
 	assert.NoError(err)
 	require.True(pool != nil)
 	ctx := context.Background()
@@ -173,9 +172,9 @@ func TestReplaceWithHigherFee(t *testing.T) {
 
 	cfg := txpoolcfg.DefaultConfig
 	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
-	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, log.New())
+	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, nil, fixedgas.DefaultMaxBlobsPerBlock, log.New())
 	assert.NoError(err)
-	require.True(pool != nil)
+	require.NotEqual(nil, pool)
 	ctx := context.Background()
 	var stateVersionID uint64 = 0
 	pendingBaseFee := uint64(200000)
@@ -290,7 +289,7 @@ func TestReverseNonces(t *testing.T) {
 
 	cfg := txpoolcfg.DefaultConfig
 	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
-	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, log.New())
+	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, nil, fixedgas.DefaultMaxBlobsPerBlock, log.New())
 	assert.NoError(err)
 	require.True(pool != nil)
 	ctx := context.Background()
@@ -417,7 +416,7 @@ func TestTxPoke(t *testing.T) {
 
 	cfg := txpoolcfg.DefaultConfig
 	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
-	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, log.New())
+	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, nil, nil, fixedgas.DefaultMaxBlobsPerBlock, log.New())
 	assert.NoError(err)
 	require.True(pool != nil)
 	ctx := context.Background()
@@ -682,7 +681,7 @@ func TestShanghaiValidateTx(t *testing.T) {
 			}
 
 			cache := &kvcache.DummyCache{}
-			pool, err := New(ch, coreDB, cfg, cache, *u256.N1, shanghaiTime, nil /* cancunTime */, logger)
+			pool, err := New(ch, coreDB, cfg, cache, *u256.N1, shanghaiTime, nil /* agraBlock */, nil /* cancunTime */, fixedgas.DefaultMaxBlobsPerBlock, logger)
 			asrt.NoError(err)
 			ctx := context.Background()
 			tx, err := coreDB.BeginRw(ctx)
@@ -728,7 +727,7 @@ func TestBlobTxReplacement(t *testing.T) {
 	db, coreDB := memdb.NewTestPoolDB(t), memdb.NewTestDB(t)
 	cfg := txpoolcfg.DefaultConfig
 	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
-	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, nil, common.Big0, log.New())
+	pool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, common.Big0, nil, common.Big0, fixedgas.DefaultMaxBlobsPerBlock, log.New())
 	assert.NoError(err)
 	require.True(pool != nil)
 	ctx := context.Background()
@@ -940,4 +939,107 @@ func makeBlobTx() types.TxSlot {
 	blobTx.FeeCap = *feeCap
 	blobTx.BlobFeeCap = *blobFeeCap
 	return blobTx
+}
+
+func TestDropRemoteAtNoGossip(t *testing.T) {
+	assert, require := assert.New(t), require.New(t)
+	ch := make(chan types.Announcements, 100)
+	db, coreDB := memdb.NewTestPoolDB(t), memdb.NewTestDB(t)
+
+	cfg := txpoolcfg.DefaultConfig
+	cfg.NoGossip = true
+
+	logger := log.New()
+	sendersCache := kvcache.New(kvcache.DefaultCoherentConfig)
+
+	txPool, err := New(ch, coreDB, cfg, sendersCache, *u256.N1, big.NewInt(0), big.NewInt(0), nil, fixedgas.DefaultMaxBlobsPerBlock, logger)
+	assert.NoError(err)
+	require.True(txPool != nil)
+
+	ctx := context.Background()
+	var stateVersionID uint64 = 0
+	pendingBaseFee := uint64(1_000_000)
+	// start blocks from 0, set empty hash - then kvcache will also work on this
+	h1 := gointerfaces.ConvertHashToH256([32]byte{})
+	change := &remote.StateChangeBatch{
+		StateVersionId:      stateVersionID,
+		PendingBlockBaseFee: pendingBaseFee,
+		BlockGasLimit:       1000000,
+		ChangeBatch: []*remote.StateChange{
+			{BlockHeight: 0, BlockHash: h1},
+		},
+	}
+	var addr [20]byte
+	addr[0] = 1
+	v := make([]byte, types.EncodeSenderLengthForStorage(2, *uint256.NewInt(1 * common.Ether)))
+	types.EncodeSender(2, *uint256.NewInt(1 * common.Ether), v)
+	change.ChangeBatch[0].Changes = append(change.ChangeBatch[0].Changes, &remote.AccountChange{
+		Action:  remote.Action_UPSERT,
+		Address: gointerfaces.ConvertAddressToH160(addr),
+		Data:    v,
+	})
+	tx, err := db.BeginRw(ctx)
+	require.NoError(err)
+	defer tx.Rollback()
+	err = txPool.OnNewBlock(ctx, change, types.TxSlots{}, types.TxSlots{}, tx)
+	assert.NoError(err)
+	// 1. Try Local Tx
+	{
+		var txSlots types.TxSlots
+		txSlot := &types.TxSlot{
+			Tip:    *uint256.NewInt(500_000),
+			FeeCap: *uint256.NewInt(3_000_000),
+			Gas:    100000,
+			Nonce:  3,
+		}
+		txSlot.IDHash[0] = 1
+		txSlots.Append(txSlot, addr[:], true)
+
+		reasons, err := txPool.AddLocalTxs(ctx, txSlots, tx)
+		assert.NoError(err)
+		for _, reason := range reasons {
+			assert.Equal(txpoolcfg.Success, reason, reason.String())
+		}
+	}
+	select {
+	case annoucements := <-ch:
+		for i := 0; i < annoucements.Len(); i++ {
+			_, _, hash := annoucements.At(i)
+			fmt.Printf("propagated hash %x\n", hash)
+		}
+	default:
+
+	}
+
+	// 2. Try same Tx, but as remote; tx must be dropped
+	{
+		var txSlots types.TxSlots
+		txSlot := &types.TxSlot{
+			Tip:    *uint256.NewInt(500_000),
+			FeeCap: *uint256.NewInt(3_000_000),
+			Gas:    100000,
+			Nonce:  3,
+		}
+		txSlot.IDHash[0] = 1
+		txSlots.Append(txSlot, addr[:], true)
+
+		txPool.AddRemoteTxs(ctx, txSlots)
+	}
+
+	// empty because AddRemoteTxs logic is intentionally empty
+	assert.Equal(0, len(txPool.unprocessedRemoteByHash))
+	assert.Equal(0, len(txPool.unprocessedRemoteTxs.Txs))
+
+	assert.NoError(txPool.processRemoteTxs(ctx))
+
+	checkAnnouncementEmpty := func() bool {
+		select {
+		case <-ch:
+			return false
+		default:
+			return true
+		}
+	}
+	// no announcement because unprocessedRemoteTxs is already empty
+	assert.True(checkAnnouncementEmpty())
 }

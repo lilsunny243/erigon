@@ -18,7 +18,7 @@ const (
 type DepositData struct {
 	PubKey                libcommon.Bytes48 `json:"pubkey"`
 	WithdrawalCredentials libcommon.Hash    `json:"withdrawal_credentials"`
-	Amount                uint64            `json:"amount"`
+	Amount                uint64            `json:"amount,string"`
 	Signature             libcommon.Bytes96 `json:"signature"`
 }
 
@@ -72,8 +72,8 @@ func (d *Deposit) HashSSZ() ([32]byte, error) {
 }
 
 type VoluntaryExit struct {
-	Epoch          uint64 `json:"epoch"`
-	ValidatorIndex uint64 `json:"validator_index"`
+	Epoch          uint64 `json:"epoch,string"`
+	ValidatorIndex uint64 `json:"validator_index,string"`
 }
 
 func (e *VoluntaryExit) EncodeSSZ(buf []byte) ([]byte, error) {
@@ -101,23 +101,23 @@ func (*VoluntaryExit) EncodingSizeSSZ() int {
 }
 
 type SignedVoluntaryExit struct {
-	VolunaryExit *VoluntaryExit    `json:"message"`
-	Signature    libcommon.Bytes96 `json:"signature"`
+	VoluntaryExit *VoluntaryExit    `json:"message"`
+	Signature     libcommon.Bytes96 `json:"signature"`
 }
 
 func (e *SignedVoluntaryExit) EncodeSSZ(dst []byte) ([]byte, error) {
-	return ssz2.MarshalSSZ(dst, e.VolunaryExit, e.Signature[:])
+	return ssz2.MarshalSSZ(dst, e.VoluntaryExit, e.Signature[:])
 }
 
 func (e *SignedVoluntaryExit) DecodeSSZ(buf []byte, version int) error {
-	e.VolunaryExit = new(VoluntaryExit)
-	return ssz2.UnmarshalSSZ(buf, version, e.VolunaryExit, e.Signature[:])
+	e.VoluntaryExit = new(VoluntaryExit)
+	return ssz2.UnmarshalSSZ(buf, version, e.VoluntaryExit, e.Signature[:])
 }
 
 func (e *SignedVoluntaryExit) HashSSZ() ([32]byte, error) {
-	return merkle_tree.HashTreeRoot(e.VolunaryExit, e.Signature[:])
+	return merkle_tree.HashTreeRoot(e.VoluntaryExit, e.Signature[:])
 }
 
 func (e *SignedVoluntaryExit) EncodingSizeSSZ() int {
-	return 96 + e.VolunaryExit.EncodingSizeSSZ()
+	return 96 + e.VoluntaryExit.EncodingSizeSSZ()
 }

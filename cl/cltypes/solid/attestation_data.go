@@ -17,7 +17,7 @@ import (
 // beaconBlockHash: 32 bytes
 // source: 40 bytes
 // target: 40 bytes
-const attestationDataBufferSize = 8 + 8 + 32 + 40*2
+const AttestationDataBufferSize = 8 + 8 + 32 + 40*2
 
 // AttestantionData contains information about attestantion, including finalized/attested checkpoints.
 type AttestationData []byte
@@ -40,11 +40,11 @@ func NewAttestionDataFromParameters(
 
 func (a AttestationData) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Slot            uint64
-		Index           uint64
-		BeaconBlockRoot libcommon.Hash
-		Source          Checkpoint
-		Target          Checkpoint
+		Slot            uint64         `json:"slot,string"`
+		Index           uint64         `json:"index,string"`
+		BeaconBlockRoot libcommon.Hash `json:"beacon_block_root"`
+		Source          Checkpoint     `json:"source"`
+		Target          Checkpoint     `json:"target"`
 	}{
 		Slot:            a.Slot(),
 		BeaconBlockRoot: a.BeaconBlockRoot(),
@@ -56,12 +56,14 @@ func (a AttestationData) MarshalJSON() ([]byte, error) {
 
 func (a AttestationData) UnmarshalJSON(buf []byte) error {
 	var tmp struct {
-		Slot            uint64
-		Index           uint64
-		BeaconBlockRoot libcommon.Hash
-		Source          Checkpoint
-		Target          Checkpoint
+		Slot            uint64         `json:"slot,string"`
+		Index           uint64         `json:"index,string"`
+		BeaconBlockRoot libcommon.Hash `json:"beacon_block_root"`
+		Source          Checkpoint     `json:"source"`
+		Target          Checkpoint     `json:"target"`
 	}
+	tmp.Source = NewCheckpoint()
+	tmp.Target = NewCheckpoint()
 	if err := json.Unmarshal(buf, &tmp); err != nil {
 		return err
 	}
@@ -74,7 +76,7 @@ func (a AttestationData) UnmarshalJSON(buf []byte) error {
 }
 
 func NewAttestationData() AttestationData {
-	return make([]byte, attestationDataBufferSize)
+	return make([]byte, AttestationDataBufferSize)
 }
 
 func (a AttestationData) Static() bool {
@@ -112,6 +114,31 @@ func (a AttestationData) SetValidatorIndex(validatorIndex uint64) {
 
 func (a AttestationData) SetBeaconBlockRoot(beaconBlockRoot libcommon.Hash) {
 	copy(a[16:], beaconBlockRoot[:])
+}
+
+func (a AttestationData) SetSlotWithRawBytes(b []byte) {
+	copy(a[:8], b)
+}
+
+func (a AttestationData) SetValidatorIndexWithRawBytes(b []byte) {
+	copy(a[8:16], b)
+
+}
+
+func (a AttestationData) RawSlot() []byte {
+	return a[:8]
+}
+
+func (a AttestationData) RawValidatorIndex() []byte {
+	return a[8:16]
+}
+
+func (a AttestationData) RawBeaconBlockRoot() []byte {
+	return a[16:48]
+}
+
+func (a AttestationData) SetBeaconBlockRootWithRawBytes(b []byte) {
+	copy(a[16:48], b)
 }
 
 func (a AttestationData) SetSource(c Checkpoint) {

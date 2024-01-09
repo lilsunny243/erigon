@@ -15,11 +15,9 @@ import (
 
 	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon-lib/common/fixedgas"
 	"github.com/ledgerwatch/erigon-lib/kv"
-	"github.com/ledgerwatch/erigon-lib/kv/memdb"
+	"github.com/ledgerwatch/erigon-lib/kv/membatch"
 	types2 "github.com/ledgerwatch/erigon-lib/types"
-
 	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/core"
 	"github.com/ledgerwatch/erigon/core/rawdb"
@@ -90,7 +88,7 @@ func SpawnMiningExecStage(s *StageState, tx kv.RwTx, cfg MiningExecCfg, quit <-c
 	ibs := state.New(stateReader)
 	stateWriter := state.NewPlainStateWriter(tx, tx, current.Header.Number.Uint64())
 
-	chainReader := ChainReader{Cfg: cfg.chainConfig, Db: tx, BlockReader: cfg.blockReader}
+	chainReader := ChainReader{Cfg: cfg.chainConfig, Db: tx, BlockReader: cfg.blockReader, Logger: logger}
 	core.InitializeBlockExecution(cfg.engine, chainReader, current.Header, &cfg.chainConfig, ibs, logger)
 
 	// Create an empty block based on temporary copied state for
@@ -115,8 +113,11 @@ func SpawnMiningExecStage(s *StageState, tx kv.RwTx, cfg MiningExecCfg, quit <-c
 		} else {
 
 			yielded := mapset.NewSet[[32]byte]()
-			simulationTx := memdb.NewMemoryBatch(tx, cfg.tmpdir)
-			defer simulationTx.Rollback()
+			var simulationTx kv.StatelessRwTx
+			m := membatch.NewHashBatch(tx, quit, cfg.tmpdir, logger)
+			defer m.Close()
+			simulationTx = m
+
 			executionAt, err := s.ExecutionAt(tx)
 			if err != nil {
 				return err
@@ -161,7 +162,7 @@ func SpawnMiningExecStage(s *StageState, tx kv.RwTx, cfg MiningExecCfg, quit <-c
 	}
 
 	var err error
-	_, current.Txs, current.Receipts, err = core.FinalizeBlockExecution(cfg.engine, stateReader, current.Header, current.Txs, current.Uncles, stateWriter, &cfg.chainConfig, ibs, current.Receipts, current.Withdrawals, ChainReaderImpl{config: &cfg.chainConfig, tx: tx, blockReader: cfg.blockReader}, true, logger)
+	_, current.Txs, current.Receipts, err = core.FinalizeBlockExecution(cfg.engine, stateReader, current.Header, current.Txs, current.Uncles, stateWriter, &cfg.chainConfig, ibs, current.Receipts, current.Withdrawals, ChainReaderImpl{config: &cfg.chainConfig, tx: tx, blockReader: cfg.blockReader, logger: logger}, true, logger)
 	if err != nil {
 		return err
 	}
@@ -180,7 +181,7 @@ func getNextTransactions(
 	header *types.Header,
 	amount uint16,
 	executionAt uint64,
-	simulationTx *memdb.MemoryMutation,
+	simulationTx kv.StatelessRwTx,
 	alreadyYielded mapset.Set[[32]byte],
 	logger log.Logger,
 ) (types.TransactionsStream, int, error) {
@@ -194,7 +195,7 @@ func getNextTransactions(
 			remainingGas := header.GasLimit - header.GasUsed
 			remainingBlobGas := uint64(0)
 			if header.BlobGasUsed != nil {
-				remainingBlobGas = fixedgas.MaxBlobGasPerBlock - *header.BlobGasUsed
+				remainingBlobGas = cfg.chainConfig.GetMaxBlobGasPerBlock() - *header.BlobGasUsed
 			}
 			if onTime, count, err = cfg.txPool2.YieldBest(amount, &txSlots, poolTx, executionAt, remainingGas, remainingBlobGas, alreadyYielded); err != nil {
 				return err
@@ -237,7 +238,7 @@ func getNextTransactions(
 	return types.NewTransactionsFixedOrder(txs), count, nil
 }
 
-func filterBadTransactions(transactions []types.Transaction, config chain.Config, blockNumber uint64, baseFee *big.Int, simulationTx *memdb.MemoryMutation, logger log.Logger) ([]types.Transaction, error) {
+func filterBadTransactions(transactions []types.Transaction, config chain.Config, blockNumber uint64, baseFee *big.Int, simulationTx kv.StatelessRwTx, logger log.Logger) ([]types.Transaction, error) {
 	initialCnt := len(transactions)
 	var filtered []types.Transaction
 	gasBailout := false
@@ -362,7 +363,7 @@ func addTransactionsToMiningBlock(logPrefix string, current *MiningBlock, chainC
 	tcount := 0
 	gasPool := new(core.GasPool).AddGas(header.GasLimit - header.GasUsed)
 	if header.BlobGasUsed != nil {
-		gasPool.AddBlobGas(fixedgas.MaxBlobGasPerBlock - *header.BlobGasUsed)
+		gasPool.AddBlobGas(chainConfig.GetMaxBlobGasPerBlock() - *header.BlobGasUsed)
 	}
 	signer := types.MakeSigner(&chainConfig, header.Number.Uint64(), header.Time)
 

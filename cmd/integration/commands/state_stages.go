@@ -10,6 +10,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ledgerwatch/erigon-lib/kv/dbutils"
+	"github.com/ledgerwatch/erigon-lib/wrap"
+
 	"github.com/c2h5oh/datasize"
 	chain2 "github.com/ledgerwatch/erigon-lib/chain"
 	common2 "github.com/ledgerwatch/erigon-lib/common"
@@ -24,7 +27,6 @@ import (
 
 	"github.com/ledgerwatch/erigon/cmd/hack/tool/fromdb"
 	"github.com/ledgerwatch/erigon/cmd/utils"
-	"github.com/ledgerwatch/erigon/common/dbutils"
 	"github.com/ledgerwatch/erigon/common/debugprint"
 	"github.com/ledgerwatch/erigon/core"
 	"github.com/ledgerwatch/erigon/core/state"
@@ -63,7 +65,7 @@ Examples:
 		erigoncli.ApplyFlagsForEthConfigCobra(cmd.Flags(), ethConfig)
 		miningConfig := params.MiningConfig{}
 		utils.SetupMinerCobra(cmd, &miningConfig)
-		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, logger)
+		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, snapshotVersion, logger)
 		if err != nil {
 			logger.Error("Opening DB", "error", err)
 			return
@@ -93,7 +95,7 @@ var loopIhCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		logger := debug.SetupCobra(cmd, "integration")
 		ctx, _ := common2.RootContext()
-		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, logger)
+		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, snapshotVersion, logger)
 		if err != nil {
 			logger.Error("Opening DB", "error", err)
 			return
@@ -117,7 +119,7 @@ var loopExecCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		logger := debug.SetupCobra(cmd, "integration")
 		ctx, _ := common2.RootContext()
-		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, logger)
+		db, err := openDB(dbCfg(kv.ChainDB, chaindata), true, snapshotVersion, logger)
 		if err != nil {
 			logger.Error("Opening DB", "error", err)
 			return
@@ -147,6 +149,7 @@ func init() {
 	withChain(stateStages)
 	withHeimdall(stateStages)
 	withWorkers(stateStages)
+	withSnapshotVersion(stateStages)
 	rootCmd.AddCommand(stateStages)
 
 	withConfig(loopIhCmd)
@@ -155,6 +158,7 @@ func init() {
 	withUnwind(loopIhCmd)
 	withChain(loopIhCmd)
 	withHeimdall(loopIhCmd)
+	withSnapshotVersion(loopIhCmd)
 	rootCmd.AddCommand(loopIhCmd)
 
 	withConfig(loopExecCmd)
@@ -164,12 +168,17 @@ func init() {
 	withChain(loopExecCmd)
 	withHeimdall(loopExecCmd)
 	withWorkers(loopExecCmd)
+	withSnapshotVersion(loopExecCmd)
 	rootCmd.AddCommand(loopExecCmd)
 }
 
 func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.Context, logger1 log.Logger) error {
 	dirs := datadir.New(datadirCli)
-	sn, borSn, agg := allSnapshots(ctx, db, logger1)
+	if err := datadir.ApplyMigrations(dirs); err != nil {
+		return err
+	}
+
+	sn, borSn, agg := allSnapshots(ctx, db, snapshotVersion, logger1)
 	defer sn.Close()
 	defer borSn.Close()
 	defer agg.Close()
@@ -218,11 +227,11 @@ func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.
 
 	br, _ := blocksIO(db, logger1)
 	execCfg := stagedsync.StageExecuteBlocksCfg(db, pm, batchSize, changeSetHook, chainConfig, engine, vmConfig, changesAcc, false, false, historyV3, dirs,
-		br, nil, genesis, syncCfg, agg)
+		br, nil, genesis, syncCfg, agg, nil)
 
-	execUntilFunc := func(execToBlock uint64) func(firstCycle bool, badBlockUnwind bool, stageState *stagedsync.StageState, unwinder stagedsync.Unwinder, tx kv.RwTx, logger log.Logger) error {
-		return func(firstCycle bool, badBlockUnwind bool, s *stagedsync.StageState, unwinder stagedsync.Unwinder, tx kv.RwTx, logger log.Logger) error {
-			if err := stagedsync.SpawnExecuteBlocksStage(s, unwinder, tx, execToBlock, ctx, execCfg, firstCycle, logger); err != nil {
+	execUntilFunc := func(execToBlock uint64) func(firstCycle bool, badBlockUnwind bool, stageState *stagedsync.StageState, unwinder stagedsync.Unwinder, txc wrap.TxContainer, logger log.Logger) error {
+		return func(firstCycle bool, badBlockUnwind bool, s *stagedsync.StageState, unwinder stagedsync.Unwinder, txc wrap.TxContainer, logger log.Logger) error {
+			if err := stagedsync.SpawnExecuteBlocksStage(s, unwinder, txc, execToBlock, ctx, execCfg, firstCycle, logger); err != nil {
 				return fmt.Errorf("spawnExecuteBlocksStage: %w", err)
 			}
 			return nil
@@ -309,7 +318,7 @@ func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.
 
 		stateStages.MockExecFunc(stages.Execution, execUntilFunc(execToBlock))
 		_ = stateStages.SetCurrentStage(stages.Execution)
-		if err := stateStages.Run(db, tx, false /* firstCycle */); err != nil {
+		if _, err := stateStages.Run(db, wrap.TxContainer{Tx: tx}, false /* firstCycle */); err != nil {
 			return err
 		}
 
@@ -344,8 +353,8 @@ func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.
 		if miner.MiningConfig.Enabled && nextBlock != nil && nextBlock.Coinbase() != (common2.Address{}) {
 			miner.MiningConfig.Etherbase = nextBlock.Coinbase()
 			miner.MiningConfig.ExtraData = nextBlock.Extra()
-			miningStages.MockExecFunc(stages.MiningCreateBlock, func(firstCycle bool, badBlockUnwind bool, s *stagedsync.StageState, u stagedsync.Unwinder, tx kv.RwTx, logger log.Logger) error {
-				err = stagedsync.SpawnMiningCreateBlockStage(s, tx,
+			miningStages.MockExecFunc(stages.MiningCreateBlock, func(firstCycle bool, badBlockUnwind bool, s *stagedsync.StageState, u stagedsync.Unwinder, txc wrap.TxContainer, logger log.Logger) error {
+				err = stagedsync.SpawnMiningCreateBlockStage(s, txc.Tx,
 					stagedsync.StageMiningCreateBlockCfg(db, miner, *chainConfig, engine, nil, nil, dirs.Tmp, br),
 					quit, logger)
 				if err != nil {
@@ -367,7 +376,7 @@ func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.
 			//})
 
 			_ = miningStages.SetCurrentStage(stages.MiningCreateBlock)
-			if err := miningStages.Run(db, tx, false /* firstCycle */); err != nil {
+			if _, err := miningStages.Run(db, wrap.TxContainer{Tx: tx}, false /* firstCycle */); err != nil {
 				return err
 			}
 			tx.Rollback()
@@ -386,7 +395,7 @@ func syncBySmallSteps(db kv.RwDB, miningConfig params.MiningConfig, ctx context.
 		}
 
 		to := execAtBlock - unwind
-		stateStages.UnwindTo(to, common2.Hash{})
+		stateStages.UnwindTo(to, stagedsync.StagedUnwind)
 
 		if err := tx.Commit(); err != nil {
 			return err
@@ -446,7 +455,7 @@ func checkMinedBlock(b1, b2 *types.Block, chainConfig *chain2.Config) {
 }
 
 func loopIh(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) error {
-	sn, borSn, agg := allSnapshots(ctx, db, logger)
+	sn, borSn, agg := allSnapshots(ctx, db, snapshotVersion, logger)
 	defer sn.Close()
 	defer borSn.Close()
 	defer agg.Close()
@@ -460,7 +469,7 @@ func loopIh(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) e
 	}
 	defer tx.Rollback()
 	sync.DisableStages(stages.Snapshots, stages.Headers, stages.BlockHashes, stages.Bodies, stages.Senders, stages.Execution, stages.AccountHistoryIndex, stages.StorageHistoryIndex, stages.TxLookup, stages.Finish)
-	if err = sync.Run(db, tx, false /* firstCycle */); err != nil {
+	if _, err = sync.Run(db, wrap.TxContainer{Tx: tx}, false /* firstCycle */); err != nil {
 		return err
 	}
 	execStage := stage(sync, tx, nil, stages.HashState)
@@ -484,7 +493,7 @@ func loopIh(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) e
 
 	sync.DisableStages(stages.IntermediateHashes)
 	_ = sync.SetCurrentStage(stages.HashState)
-	if err = sync.Run(db, tx, false /* firstCycle */); err != nil {
+	if _, err = sync.Run(db, wrap.TxContainer{Tx: tx}, false /* firstCycle */); err != nil {
 		return err
 	}
 	must(tx.Commit())
@@ -504,7 +513,7 @@ func loopIh(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) e
 
 		_ = sync.SetCurrentStage(stages.IntermediateHashes)
 		t := time.Now()
-		if err = sync.Run(db, tx, false /* firstCycle */); err != nil {
+		if _, err = sync.Run(db, wrap.TxContainer{Tx: tx}, false /* firstCycle */); err != nil {
 			return err
 		}
 		logger.Warn("loop", "time", time.Since(t).String())
@@ -520,7 +529,7 @@ func loopIh(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) e
 func loopExec(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger) error {
 	chainConfig := fromdb.ChainConfig(db)
 	dirs, pm := datadir.New(datadirCli), fromdb.PruneMode(db)
-	sn, borSn, agg := allSnapshots(ctx, db, logger)
+	sn, borSn, agg := allSnapshots(ctx, db, snapshotVersion, logger)
 	defer sn.Close()
 	defer borSn.Close()
 	defer agg.Close()
@@ -556,11 +565,11 @@ func loopExec(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger)
 	br, _ := blocksIO(db, logger)
 	cfg := stagedsync.StageExecuteBlocksCfg(db, pm, batchSize, nil, chainConfig, engine, vmConfig, nil,
 		/*stateStream=*/ false,
-		/*badBlockHalt=*/ false, historyV3, dirs, br, nil, genesis, syncCfg, agg)
+		/*badBlockHalt=*/ false, historyV3, dirs, br, nil, genesis, syncCfg, agg, nil)
 
 	// set block limit of execute stage
-	sync.MockExecFunc(stages.Execution, func(firstCycle bool, badBlockUnwind bool, stageState *stagedsync.StageState, unwinder stagedsync.Unwinder, tx kv.RwTx, logger log.Logger) error {
-		if err = stagedsync.SpawnExecuteBlocksStage(stageState, sync, tx, to, ctx, cfg, initialCycle, logger); err != nil {
+	sync.MockExecFunc(stages.Execution, func(firstCycle bool, badBlockUnwind bool, stageState *stagedsync.StageState, unwinder stagedsync.Unwinder, txc wrap.TxContainer, logger log.Logger) error {
+		if err = stagedsync.SpawnExecuteBlocksStage(stageState, sync, txc, to, ctx, cfg, initialCycle, logger); err != nil {
 			return fmt.Errorf("spawnExecuteBlocksStage: %w", err)
 		}
 		return nil
@@ -575,7 +584,7 @@ func loopExec(db kv.RwDB, ctx context.Context, unwind uint64, logger log.Logger)
 
 		_ = sync.SetCurrentStage(stages.Execution)
 		t := time.Now()
-		if err = sync.Run(db, tx, initialCycle); err != nil {
+		if _, err = sync.Run(db, wrap.TxContainer{Tx: tx}, initialCycle); err != nil {
 			return err
 		}
 		logger.Info("[Integration] ", "loop time", time.Since(t))

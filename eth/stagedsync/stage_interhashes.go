@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/ledgerwatch/erigon-lib/kv/dbutils"
 	"math/bits"
 	"sync/atomic"
 
@@ -20,8 +21,6 @@ import (
 	"github.com/ledgerwatch/log/v3"
 	"golang.org/x/exp/slices"
 
-	"github.com/ledgerwatch/erigon/common"
-	"github.com/ledgerwatch/erigon/common/dbutils"
 	"github.com/ledgerwatch/erigon/common/math"
 	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/core/types"
@@ -136,7 +135,7 @@ func SpawnIntermediateHashesStage(s *StageState, u Unwinder, tx kv.RwTx, cfg Tri
 		if to > s.BlockNumber {
 			unwindTo := (to + s.BlockNumber) / 2 // Binary search for the correct block, biased to the lower numbers
 			logger.Warn("Unwinding due to incorrect root hash", "to", unwindTo)
-			u.UnwindTo(unwindTo, headerHash)
+			u.UnwindTo(unwindTo, BadBlock(headerHash, fmt.Errorf("Incorrect root hash")))
 		}
 	} else if err = s.Update(tx, to); err != nil {
 		return trie.EmptyRoot, err
@@ -229,11 +228,11 @@ func (p *HashPromoter) PromoteOnHistoryV3(logPrefix string, from, to uint64, sto
 			if err != nil {
 				return err
 			}
-			addrHash, err := common.HashData(k[:length.Addr])
+			addrHash, err := libcommon.HashData(k[:length.Addr])
 			if err != nil {
 				return err
 			}
-			secKey, err := common.HashData(k[length.Addr:])
+			secKey, err := libcommon.HashData(k[length.Addr:])
 			if err != nil {
 				return err
 			}
@@ -347,7 +346,7 @@ func (p *HashPromoter) Promote(logPrefix string, from, to uint64, storage bool, 
 	}
 
 	if !storage { // delete Intermediate hashes of deleted accounts
-		slices.SortFunc(deletedAccounts, func(a, b []byte) bool { return bytes.Compare(a, b) < 0 })
+		slices.SortFunc(deletedAccounts, bytes.Compare)
 		for _, k := range deletedAccounts {
 			if err := p.tx.ForPrefix(kv.TrieOfStorage, k, func(k, v []byte) error {
 				if err := p.tx.Delete(kv.TrieOfStorage, k); err != nil {
@@ -445,7 +444,7 @@ func (p *HashPromoter) UnwindOnHistoryV3(logPrefix string, unwindFrom, unwindTo 
 	}
 
 	// delete Intermediate hashes of deleted accounts
-	slices.SortFunc(deletedAccounts, func(a, b []byte) bool { return bytes.Compare(a, b) < 0 })
+	slices.SortFunc(deletedAccounts, bytes.Compare)
 	for _, k := range deletedAccounts {
 		if err := p.tx.ForPrefix(kv.TrieOfStorage, k, func(k, v []byte) error {
 			if err := p.tx.Delete(kv.TrieOfStorage, k); err != nil {
@@ -533,7 +532,7 @@ func (p *HashPromoter) Unwind(logPrefix string, s *StageState, u *UnwindState, s
 	}
 
 	if !storage { // delete Intermediate hashes of deleted accounts
-		slices.SortFunc(deletedAccounts, func(a, b []byte) bool { return bytes.Compare(a, b) < 0 })
+		slices.SortFunc(deletedAccounts, bytes.Compare)
 		for _, k := range deletedAccounts {
 			if err := p.tx.ForPrefix(kv.TrieOfStorage, k, func(k, v []byte) error {
 				if err := p.tx.Delete(kv.TrieOfStorage, k); err != nil {

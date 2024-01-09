@@ -1,12 +1,14 @@
 package ethconsensusconfig
 
 import (
+	"context"
 	"path/filepath"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ledgerwatch/log/v3"
 
 	"github.com/ledgerwatch/erigon-lib/chain"
+	"github.com/ledgerwatch/erigon/consensus/bor/borcfg"
 
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon/consensus"
@@ -25,7 +27,7 @@ import (
 	"github.com/ledgerwatch/erigon/turbo/services"
 )
 
-func CreateConsensusEngine(nodeConfig *nodecfg.Config, chainConfig *chain.Config, config interface{}, notify []string, noVerify bool,
+func CreateConsensusEngine(ctx context.Context, nodeConfig *nodecfg.Config, chainConfig *chain.Config, config interface{}, notify []string, noVerify bool,
 	heimdallClient heimdall.IHeimdallClient, withoutHeimdall bool, blockReader services.FullBlockReader, readonly bool,
 	logger log.Logger,
 ) consensus.Engine {
@@ -70,7 +72,7 @@ func CreateConsensusEngine(nodeConfig *nodecfg.Config, chainConfig *chain.Config
 			var err error
 			var db kv.RwDB
 
-			db, err = node.OpenDatabase(nodeConfig, kv.ConsensusDB, "clique", readonly, logger)
+			db, err = node.OpenDatabase(ctx, nodeConfig, kv.ConsensusDB, "clique", readonly, logger)
 
 			if err != nil {
 				panic(err)
@@ -83,7 +85,7 @@ func CreateConsensusEngine(nodeConfig *nodecfg.Config, chainConfig *chain.Config
 			var err error
 			var db kv.RwDB
 
-			db, err = node.OpenDatabase(nodeConfig, kv.ConsensusDB, "aura", readonly, logger)
+			db, err = node.OpenDatabase(ctx, nodeConfig, kv.ConsensusDB, "aura", readonly, logger)
 
 			if err != nil {
 				panic(err)
@@ -94,19 +96,19 @@ func CreateConsensusEngine(nodeConfig *nodecfg.Config, chainConfig *chain.Config
 				panic(err)
 			}
 		}
-	case *chain.BorConfig:
+	case *borcfg.BorConfig:
 		// If Matic bor consensus is requested, set it up
 		// In order to pass the ethereum transaction tests, we need to set the burn contract which is in the bor config
 		// Then, bor != nil will also be enabled for ethash and clique. Only enable Bor for real if there is a validator contract present.
-		if chainConfig.Bor != nil && chainConfig.Bor.ValidatorContract != "" {
-			genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, chainConfig.Bor.ValidatorContract, chainConfig.Bor.StateReceiverContract, logger)
+		if chainConfig.Bor != nil && consensusCfg.ValidatorContract != "" {
+			genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, consensusCfg.ValidatorContract, consensusCfg.StateReceiverContract, logger)
 
 			spanner := span.NewChainSpanner(contract.ValidatorSet(), chainConfig, withoutHeimdall, logger)
 
 			var err error
 			var db kv.RwDB
 
-			db, err = node.OpenDatabase(nodeConfig, kv.ConsensusDB, "bor", readonly, logger)
+			db, err = node.OpenDatabase(ctx, nodeConfig, kv.ConsensusDB, "bor", readonly, logger)
 
 			if err != nil {
 				panic(err)
@@ -127,7 +129,7 @@ func CreateConsensusEngine(nodeConfig *nodecfg.Config, chainConfig *chain.Config
 	}
 }
 
-func CreateConsensusEngineBareBones(chainConfig *chain.Config, logger log.Logger) consensus.Engine {
+func CreateConsensusEngineBareBones(ctx context.Context, chainConfig *chain.Config, logger log.Logger) consensus.Engine {
 	var consensusConfig interface{}
 
 	if chainConfig.Clique != nil {
@@ -142,6 +144,6 @@ func CreateConsensusEngineBareBones(chainConfig *chain.Config, logger log.Logger
 		consensusConfig = &ethashCfg
 	}
 
-	return CreateConsensusEngine(&nodecfg.Config{}, chainConfig, consensusConfig, nil /* notify */, true, /* noVerify */
+	return CreateConsensusEngine(ctx, &nodecfg.Config{}, chainConfig, consensusConfig, nil /* notify */, true, /* noVerify */
 		nil /* heimdallClient */, true /* withoutHeimdall */, nil /* blockReader */, false /* readonly */, logger)
 }

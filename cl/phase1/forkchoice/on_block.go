@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/log/v3"
 
 	"github.com/ledgerwatch/erigon/cl/cltypes"
+	"github.com/ledgerwatch/erigon/cl/cltypes/solid"
 	"github.com/ledgerwatch/erigon/cl/freezer"
+	"github.com/ledgerwatch/erigon/cl/phase1/core/state"
 	"github.com/ledgerwatch/erigon/cl/phase1/forkchoice/fork_graph"
 	"github.com/ledgerwatch/erigon/cl/transition/impl/eth2/statechange"
 )
@@ -15,6 +18,7 @@ import (
 func (f *ForkChoiceStore) OnBlock(block *cltypes.SignedBeaconBlock, newPayload, fullValidation bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.headHash = libcommon.Hash{}
 	start := time.Now()
 	blockRoot, err := block.Block.HashSSZ()
 	if err != nil {
@@ -29,7 +33,6 @@ func (f *ForkChoiceStore) OnBlock(block *cltypes.SignedBeaconBlock, newPayload, 
 		return nil
 	}
 
-	config := f.forkGraph.Config()
 	var invalidBlock bool
 	if newPayload && f.engine != nil {
 		if invalidBlock, err = f.engine.NewPayload(block.Block.Body.ExecutionPayload, &block.Block.ParentRoot); err != nil {
@@ -49,6 +52,7 @@ func (f *ForkChoiceStore) OnBlock(block *cltypes.SignedBeaconBlock, newPayload, 
 	case fork_graph.PreValidated:
 		return nil
 	case fork_graph.Success:
+		f.updateChildren(block.Block.Slot-1, block.Block.ParentRoot, blockRoot) // parent slot can be innacurate
 	case fork_graph.BelowAnchor:
 		log.Debug("replay block", "code", status)
 		return nil
@@ -62,17 +66,41 @@ func (f *ForkChoiceStore) OnBlock(block *cltypes.SignedBeaconBlock, newPayload, 
 	if block.Block.Slot > f.highestSeen {
 		f.highestSeen = block.Block.Slot
 	}
+	// Remove the parent from the head set
+	delete(f.headSet, block.Block.ParentRoot)
+	f.headSet[blockRoot] = struct{}{}
 	// Add proposer score boost if the block is timely
-	timeIntoSlot := (f.time - f.forkGraph.GenesisTime()) % lastProcessedState.BeaconConfig().SecondsPerSlot
-	isBeforeAttestingInterval := timeIntoSlot < config.SecondsPerSlot/config.IntervalsPerSlot
-	if f.Slot() == block.Block.Slot && isBeforeAttestingInterval {
+	timeIntoSlot := (f.time - f.genesisTime) % lastProcessedState.BeaconConfig().SecondsPerSlot
+	isBeforeAttestingInterval := timeIntoSlot < f.beaconCfg.SecondsPerSlot/f.beaconCfg.IntervalsPerSlot
+	if f.Slot() == block.Block.Slot && isBeforeAttestingInterval && f.proposerBoostRoot == (libcommon.Hash{}) {
 		f.proposerBoostRoot = blockRoot
 	}
-	if lastProcessedState.Slot()%f.forkGraph.Config().SlotsPerEpoch == 0 {
+	if lastProcessedState.Slot()%f.beaconCfg.SlotsPerEpoch == 0 {
 		if err := freezer.PutObjectSSZIntoFreezer("beaconState", "caplin_core", lastProcessedState.Slot(), lastProcessedState, f.recorder); err != nil {
 			return err
 		}
+		// Update randao mixes
+		r := solid.NewHashVector(int(f.beaconCfg.EpochsPerHistoricalVector))
+		lastProcessedState.RandaoMixes().CopyTo(r)
+		f.randaoMixesLists.Add(blockRoot, r)
+	} else {
+		f.randaoDeltas.Add(blockRoot, randaoDelta{
+			epoch: state.Epoch(lastProcessedState),
+			delta: lastProcessedState.GetRandaoMixes(state.Epoch(lastProcessedState)),
+		})
 	}
+	f.participation.Add(state.Epoch(lastProcessedState), lastProcessedState.CurrentEpochParticipation().Copy())
+	f.preverifiedSizes.Add(blockRoot, preverifiedAppendListsSizes{
+		validatorLength:           uint64(lastProcessedState.ValidatorLength()),
+		historicalRootsLength:     lastProcessedState.HistoricalRootsLength(),
+		historicalSummariesLength: lastProcessedState.HistoricalSummariesLength(),
+	})
+	f.finalityCheckpoints.Add(blockRoot, finalityCheckpoints{
+		finalizedCheckpoint:         lastProcessedState.FinalizedCheckpoint().Copy(),
+		currentJustifiedCheckpoint:  lastProcessedState.CurrentJustifiedCheckpoint().Copy(),
+		previousJustifiedCheckpoint: lastProcessedState.PreviousJustifiedCheckpoint().Copy(),
+	})
+	f.totalActiveBalances.Add(blockRoot, lastProcessedState.GetTotalActiveBalance())
 	// Update checkpoints
 	f.updateCheckpoints(lastProcessedState.CurrentJustifiedCheckpoint().Copy(), lastProcessedState.FinalizedCheckpoint().Copy())
 	// First thing save previous values of the checkpoints (avoid memory copy of all states and ensure easy revert)
@@ -86,6 +114,7 @@ func (f *ForkChoiceStore) OnBlock(block *cltypes.SignedBeaconBlock, newPayload, 
 	if err := statechange.ProcessJustificationBitsAndFinality(lastProcessedState, nil); err != nil {
 		return err
 	}
+	f.operationsPool.NotifyBlock(block.Block)
 	f.updateUnrealizedCheckpoints(lastProcessedState.CurrentJustifiedCheckpoint().Copy(), lastProcessedState.FinalizedCheckpoint().Copy())
 	// Set the changed value pre-simulation
 	lastProcessedState.SetPreviousJustifiedCheckpoint(previousJustifiedCheckpoint)

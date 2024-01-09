@@ -90,3 +90,13 @@ caplin-recordings
 jwt.hex
 
 .tool-versions
+
+*__debug_bin*
+yarn.lock
+node_modules
+
+/config.toml
+/config.yaml
+/config.yml
+
+vendor

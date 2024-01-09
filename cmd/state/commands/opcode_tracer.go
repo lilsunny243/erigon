@@ -18,7 +18,6 @@ import (
 
 	chain2 "github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon-lib/common/fixedgas"
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon-lib/kv/kvcfg"
 	"github.com/ledgerwatch/erigon-lib/kv/mdbx"
@@ -45,6 +44,7 @@ var (
 func init() {
 	withBlock(opcodeTracerCmd)
 	withDataDir(opcodeTracerCmd)
+	withSnapshotVersion(opcodeTracerCmd)
 	opcodeTracerCmd.Flags().Uint64Var(&numBlocks, "numBlocks", 1, "number of blocks to run the operation on")
 	opcodeTracerCmd.Flags().BoolVar(&saveOpcodes, "saveOpcodes", false, "set to save the opcodes")
 	opcodeTracerCmd.Flags().BoolVar(&saveBBlocks, "saveBBlocks", false, "set to save the basic blocks")
@@ -57,7 +57,7 @@ var opcodeTracerCmd = &cobra.Command{
 	Short: "Re-executes historical transactions in read-only mode and traces them at the opcode level",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := log.New("opcode-tracer", genesis.Config.ChainID)
-		return OpcodeTracer(genesis, block, chaindata, numBlocks, saveOpcodes, saveBBlocks, logger)
+		return OpcodeTracer(genesis, snapshotVersion, block, chaindata, numBlocks, saveOpcodes, saveBBlocks, logger)
 	},
 }
 
@@ -114,7 +114,7 @@ type opcodeTracer struct {
 	saveBblocks bool
 	blockNumber uint64
 	depth       int
-	env         vm.VMInterface
+	env         *vm.EVM
 }
 
 func NewOpcodeTracer(blockNum uint64, saveOpcodes bool, saveBblocks bool) *opcodeTracer {
@@ -195,7 +195,7 @@ func (ot *opcodeTracer) captureStartOrEnter(from, to libcommon.Address, create b
 	ot.stack = append(ot.stack, &newTx)
 }
 
-func (ot *opcodeTracer) CaptureStart(env vm.VMInterface, from libcommon.Address, to libcommon.Address, precompile bool, create bool, input []byte, gas uint64, value *uint256.Int, code []byte) {
+func (ot *opcodeTracer) CaptureStart(env *vm.EVM, from libcommon.Address, to libcommon.Address, precompile bool, create bool, input []byte, gas uint64, value *uint256.Int, code []byte) {
 	ot.env = env
 	ot.depth = 0
 	ot.captureStartOrEnter(from, to, create, input)
@@ -257,7 +257,7 @@ func (ot *opcodeTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, 
 	}
 
 	pc16 := uint16(pc)
-	currentTxHash := ot.env.TxContext().TxHash
+	currentTxHash := ot.env.TxHash
 	currentTxDepth := opDepth - 1
 
 	ls := len(ot.stack)
@@ -396,7 +396,7 @@ type segPrefix struct {
 
 // OpcodeTracer re-executes historical transactions in read-only mode
 // and traces them at the opcode level
-func OpcodeTracer(genesis *types.Genesis, blockNum uint64, chaindata string, numBlocks uint64,
+func OpcodeTracer(genesis *types.Genesis, snapshotVersion uint8, blockNum uint64, chaindata string, numBlocks uint64,
 	saveOpcodes bool, saveBblocks bool, logger log.Logger) error {
 	blockNumOrig := blockNum
 
@@ -429,7 +429,7 @@ func OpcodeTracer(genesis *types.Genesis, blockNum uint64, chaindata string, num
 		}
 		return nil
 	})
-	blockReader := freezeblocks.NewBlockReader(freezeblocks.NewRoSnapshots(ethconfig.BlocksFreezing{Enabled: false}, "", log.New()), nil /* BorSnapshots */)
+	blockReader := freezeblocks.NewBlockReader(freezeblocks.NewRoSnapshots(ethconfig.BlocksFreezing{Enabled: false}, "", snapshotVersion, log.New()), nil /* BorSnapshots */)
 
 	chainConfig := genesis.Config
 	vmConfig := vm.Config{Tracer: ot, Debug: true}
@@ -709,7 +709,7 @@ func runBlock(engine consensus.Engine, ibs *state.IntraBlockState, txnWriter sta
 	chainConfig *chain2.Config, getHeader func(hash libcommon.Hash, number uint64) *types.Header, block *types.Block, vmConfig vm.Config, trace bool, logger log.Logger) (types.Receipts, error) {
 	header := block.Header()
 	vmConfig.TraceJumpDest = true
-	gp := new(core.GasPool).AddGas(block.GasLimit()).AddBlobGas(fixedgas.MaxBlobGasPerBlock)
+	gp := new(core.GasPool).AddGas(block.GasLimit()).AddBlobGas(chainConfig.GetMaxBlobGasPerBlock())
 	usedGas := new(uint64)
 	usedBlobGas := new(uint64)
 	var receipts types.Receipts

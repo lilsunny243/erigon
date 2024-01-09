@@ -1,8 +1,11 @@
 package helper
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
+	"github.com/ledgerwatch/erigon/consensus/bor/borcfg"
 	"math/big"
 	"os"
 	"time"
@@ -27,7 +30,6 @@ import (
 
 // InitGenesis initializes genesis file from json with sprint size and chain name as configurable inputs
 func InitGenesis(fileLocation string, sprintSize uint64, chainName string) types.Genesis {
-
 	// sprint size = 8 in genesis
 	genesisData, err := os.ReadFile(fileLocation)
 	if err != nil {
@@ -35,13 +37,22 @@ func InitGenesis(fileLocation string, sprintSize uint64, chainName string) types
 	}
 
 	genesis := &types.Genesis{}
-
 	if err := json.Unmarshal(genesisData, genesis); err != nil {
 		panic(err)
 	}
 
-	genesis.Config.Bor.Sprint["0"] = sprintSize
 	genesis.Config.ChainName = chainName
+
+	if genesis.Config.BorJSON != nil {
+		borConfig := &borcfg.BorConfig{}
+		err = json.Unmarshal(genesis.Config.BorJSON, borConfig)
+		if err != nil {
+			panic(fmt.Sprintf("Could not parse 'bor' config for %s: %v", fileLocation, err))
+		}
+
+		borConfig.Sprint["0"] = sprintSize
+		genesis.Config.Bor = borConfig
+	}
 
 	return *genesis
 }
@@ -65,7 +76,7 @@ func NewNodeConfig() *nodecfg.Config {
 }
 
 // InitNode initializes a node with the given genesis file and config
-func InitMiner(genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, minerID int) (*node.Node, *eth.Ethereum, error) {
+func InitMiner(ctx context.Context, genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, minerID int) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	ddir, _ := os.MkdirTemp("", "")
 
@@ -92,7 +103,7 @@ func InitMiner(genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdal
 		MdbxDBSizeLimit: 64 * datasize.MB,
 	}
 
-	stack, err := node.New(nodeCfg, logger)
+	stack, err := node.New(context.Background(), nodeCfg, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -112,7 +123,7 @@ func InitMiner(genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdal
 		return nil, nil, err
 	}
 
-	downloaderConfig, err := downloadercfg.New(datadir.New(ddir), nodeCfg.Version, torrentLogLevel, downloadRate, uploadRate, utils.TorrentPortFlag.Value, utils.TorrentConnsPerFileFlag.Value, utils.TorrentDownloadSlotsFlag.Value, []string{}, "")
+	downloaderConfig, err := downloadercfg.New(datadir.New(ddir), nodeCfg.Version, torrentLogLevel, downloadRate, uploadRate, utils.TorrentPortFlag.Value, utils.TorrentConnsPerFileFlag.Value, utils.TorrentDownloadSlotsFlag.Value, []string{}, []string{}, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,7 +152,6 @@ func InitMiner(genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdal
 		RPCGasCap:        50000000,
 		RPCTxFeeCap:      1, // 1 ether
 		Snapshot:         ethconfig.BlocksFreezing{NoDownloader: true},
-		P2PEnabled:       true,
 		StateStream:      true,
 	}
 	ethCfg.TxPool.DBDir = nodeCfg.Dirs.TxPool
@@ -152,7 +162,7 @@ func InitMiner(genesis *types.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdal
 	ethCfg.DeprecatedTxPool.AccountSlots = 1000000
 	ethCfg.DeprecatedTxPool.GlobalSlots = 1000000
 
-	ethBackend, err := eth.New(stack, ethCfg, logger)
+	ethBackend, err := eth.New(ctx, stack, ethCfg, logger)
 	if err != nil {
 		return nil, nil, err
 	}

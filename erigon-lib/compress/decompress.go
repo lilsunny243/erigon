@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/erigon-lib/mmap"
@@ -160,6 +161,7 @@ func NewDecompressor(compressedFilePath string) (d *Decompressor, err error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var stat os.FileInfo
 	if stat, err = d.f.Stat(); err != nil {
 		return nil, err
@@ -333,12 +335,20 @@ func buildPosTable(depths []uint64, poss []uint64, table *posTable, code uint16,
 	return b0 + buildPosTable(depths[b0:], poss[b0:], table, (uint16(1)<<bits)|code, bits+1, depth+1, maxDepth-1)
 }
 
+func (d *Decompressor) DataHandle() unsafe.Pointer {
+	return unsafe.Pointer(&d.data[0])
+}
+
 func (d *Decompressor) Size() int64 {
 	return d.size
 }
 
 func (d *Decompressor) ModTime() time.Time {
 	return d.modTime
+}
+
+func (d *Decompressor) IsOpen() bool {
+	return d != nil && d.f != nil
 }
 
 func (d *Decompressor) Close() {

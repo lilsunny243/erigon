@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ledgerwatch/log/v3"
+
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
@@ -16,12 +18,12 @@ import (
 	"github.com/ledgerwatch/erigon/cmd/devnet/blocks"
 	"github.com/ledgerwatch/erigon/cmd/devnet/contracts"
 	"github.com/ledgerwatch/erigon/cmd/devnet/devnet"
+	"github.com/ledgerwatch/erigon/consensus/bor/borcfg"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/checkpoint"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/milestone"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdall/span"
 	"github.com/ledgerwatch/erigon/consensus/bor/heimdallgrpc"
 	"github.com/ledgerwatch/erigon/consensus/bor/valset"
-	"github.com/ledgerwatch/log/v3"
 )
 
 type BridgeEvent string
@@ -52,6 +54,8 @@ const (
 	DefaultCheckpointBufferTime      time.Duration = 1000 * time.Second
 )
 
+const HeimdallGrpcAddressDefault = "localhost:8540"
+
 type CheckpointConfig struct {
 	RootChainTxConfirmations  uint64
 	ChildChainTxConfirmations uint64
@@ -65,6 +69,8 @@ type CheckpointConfig struct {
 type Heimdall struct {
 	sync.Mutex
 	chainConfig        *chain.Config
+	borConfig          *borcfg.BorConfig
+	grpcAddr           string
 	validatorSet       *valset.ValidatorSet
 	pendingCheckpoint  *checkpoint.Checkpoint
 	latestCheckpoint   *CheckpointAck
@@ -85,9 +91,16 @@ type Heimdall struct {
 	startTime          time.Time
 }
 
-func NewHeimdall(chainConfig *chain.Config, checkpointConfig *CheckpointConfig, logger log.Logger) *Heimdall {
+func NewHeimdall(
+	chainConfig *chain.Config,
+	grpcAddr string,
+	checkpointConfig *CheckpointConfig,
+	logger log.Logger,
+) *Heimdall {
 	heimdall := &Heimdall{
 		chainConfig:        chainConfig,
+		borConfig:          chainConfig.Bor.(*borcfg.BorConfig),
+		grpcAddr:           grpcAddr,
 		checkpointConfig:   *checkpointConfig,
 		spans:              map[uint64]*span.HeimdallSpan{},
 		pendingSyncRecords: map[syncRecordKey]*EventRecordWithBlock{},
@@ -149,7 +162,7 @@ func (h *Heimdall) Span(ctx context.Context, spanID uint64) (*span.HeimdallSpan,
 		nextSpan.StartBlock = h.currentSpan.EndBlock + 1
 	}
 
-	nextSpan.EndBlock = nextSpan.StartBlock + (100 * h.chainConfig.Bor.CalculateSprint(nextSpan.StartBlock)) - 1
+	nextSpan.EndBlock = nextSpan.StartBlock + (100 * h.borConfig.CalculateSprintLength(nextSpan.StartBlock)) - 1
 
 	// TODO we should use a subset here - see: https://wiki.polygon.technology/docs/pos/bor/
 
@@ -173,10 +186,10 @@ func (h *Heimdall) Span(ctx context.Context, spanID uint64) (*span.HeimdallSpan,
 
 func (h *Heimdall) currentSprintLength() int {
 	if h.currentSpan != nil {
-		return int(h.chainConfig.Bor.CalculateSprint(h.currentSpan.StartBlock))
+		return int(h.borConfig.CalculateSprintLength(h.currentSpan.StartBlock))
 	}
 
-	return int(h.chainConfig.Bor.CalculateSprint(256))
+	return int(h.borConfig.CalculateSprintLength(256))
 }
 
 func (h *Heimdall) getSpanOverrideHeight() uint64 {
@@ -193,7 +206,7 @@ func (h *Heimdall) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	return 0, fmt.Errorf("TODO")
 }
 
-func (h *Heimdall) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+func (h *Heimdall) FetchMilestone(ctx context.Context, number int64) (*milestone.Milestone, error) {
 	return nil, fmt.Errorf("TODO")
 }
 
@@ -256,14 +269,18 @@ func (h *Heimdall) NodeCreated(ctx context.Context, node devnet.Node) {
 	h.Lock()
 	defer h.Unlock()
 
-	if strings.HasPrefix(node.Name(), "bor") && node.IsBlockProducer() && node.Account() != nil {
+	if strings.HasPrefix(node.GetName(), "bor") && node.IsBlockProducer() && node.Account() != nil {
 		// TODO configurable voting power
 		h.addValidator(node.Account().Address, 1000, 0)
 	}
 }
 
 func (h *Heimdall) NodeStarted(ctx context.Context, node devnet.Node) {
-	if !strings.HasPrefix(node.Name(), "bor") && node.IsBlockProducer() {
+	if h.validatorSet == nil {
+		panic("Heimdall devnet service: unexpected empty validator set! Call addValidator() before starting nodes.")
+	}
+
+	if !strings.HasPrefix(node.GetName(), "bor") && node.IsBlockProducer() {
 		h.Lock()
 		defer h.Unlock()
 
@@ -276,8 +293,10 @@ func (h *Heimdall) NodeStarted(ctx context.Context, node devnet.Node) {
 		transactOpts, err := bind.NewKeyedTransactorWithChainID(accounts.SigKey(node.Account().Address), node.ChainID())
 
 		if err != nil {
+			h.Unlock()
 			h.unsubscribe()
-			h.logger.Error("Failed to deploy state sender", "err", err)
+			h.Lock()
+			h.logger.Error("Failed to create transact opts for deploying state sender", "err", err)
 			return
 		}
 
@@ -320,7 +339,7 @@ func (h *Heimdall) NodeStarted(ctx context.Context, node devnet.Node) {
 			h.logger.Info("RootChain deployed", "chain", h.chainConfig.ChainName, "block", blocks[syncTx.Hash()].Number, "addr", h.rootChainAddress)
 			h.logger.Info("StateSender deployed", "chain", h.chainConfig.ChainName, "block", blocks[syncTx.Hash()].Number, "addr", h.syncSenderAddress)
 
-			go h.startStateSyncSubacription()
+			go h.startStateSyncSubscription()
 			go h.startChildHeaderSubscription(deployCtx)
 			go h.startRootHeaderBlockSubscription()
 		}()
@@ -362,19 +381,7 @@ func (h *Heimdall) Start(ctx context.Context) error {
 	// if this is a restart
 	h.unsubscribe()
 
-	return heimdallgrpc.StartHeimdallServer(ctx, h, HeimdallGRpc(ctx), h.logger)
-}
-
-func HeimdallGRpc(ctx context.Context) string {
-	addr := "localhost:8540"
-
-	if cli := devnet.CliContext(ctx); cli != nil {
-		if grpcAddr := cli.String("bor.heimdallgRPC"); len(grpcAddr) > 0 {
-			addr = grpcAddr
-		}
-	}
-
-	return addr
+	return heimdallgrpc.StartHeimdallServer(ctx, h, h.grpcAddr, h.logger)
 }
 
 func (h *Heimdall) Stop() {

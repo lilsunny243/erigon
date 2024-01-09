@@ -19,10 +19,10 @@ package txpooluitl
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/c2h5oh/datasize"
-	mdbx2 "github.com/erigontech/mdbx-go/mdbx"
 	"github.com/holiman/uint256"
 	"github.com/ledgerwatch/log/v3"
 
@@ -102,12 +102,12 @@ func SaveChainConfigIfNeed(ctx context.Context, coreDB kv.RoDB, txPoolDB kv.RwDB
 
 func AllComponents(ctx context.Context, cfg txpoolcfg.Config, cache kvcache.Cache, newTxs chan types.Announcements, chainDB kv.RoDB,
 	sentryClients []direct.SentryClient, stateChangesClient txpool.StateChangesClient, logger log.Logger) (kv.RwDB, *txpool.TxPool, *txpool.Fetch, *txpool.Send, *txpool.GrpcServer, error) {
-	opts := mdbx.NewMDBX(log.New()).Label(kv.TxPoolDB).Path(cfg.DBDir).
+	opts := mdbx.NewMDBX(logger).Label(kv.TxPoolDB).Path(cfg.DBDir).
 		WithTableCfg(func(defaultBuckets kv.TableCfg) kv.TableCfg { return kv.TxpoolTablesCfg }).
-		Flags(func(f uint) uint { return f ^ mdbx2.Durable }).
 		WriteMergeThreshold(3 * 8192).
 		PageSize(uint64(16 * datasize.KB)).
 		GrowthStep(16 * datasize.MB).
+		DirtySpace(uint64(128 * datasize.MB)).
 		MapSize(1 * datasize.TB)
 
 	if cfg.MdbxPageSize.Bytes() > 0 {
@@ -120,7 +120,7 @@ func AllComponents(ctx context.Context, cfg txpoolcfg.Config, cache kvcache.Cach
 		opts = opts.GrowthStep(cfg.MdbxGrowthStep)
 	}
 
-	txPoolDB, err := opts.Open()
+	txPoolDB, err := opts.Open(ctx)
 
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
@@ -132,14 +132,19 @@ func AllComponents(ctx context.Context, cfg txpoolcfg.Config, cache kvcache.Cach
 	}
 
 	chainID, _ := uint256.FromBig(chainConfig.ChainID)
+	maxBlobsPerBlock := chainConfig.GetMaxBlobsPerBlock()
 
 	shanghaiTime := chainConfig.ShanghaiTime
+	var agraBlock *big.Int
+	if chainConfig.Bor != nil {
+		agraBlock = chainConfig.Bor.GetAgraBlock()
+	}
 	cancunTime := chainConfig.CancunTime
 	if cfg.OverrideCancunTime != nil {
 		cancunTime = cfg.OverrideCancunTime
 	}
 
-	txPool, err := txpool.New(newTxs, chainDB, cfg, cache, *chainID, shanghaiTime, cancunTime, logger)
+	txPool, err := txpool.New(newTxs, chainDB, cfg, cache, *chainID, shanghaiTime, agraBlock, cancunTime, maxBlobsPerBlock, logger)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

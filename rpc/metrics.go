@@ -18,11 +18,9 @@ package rpc
 
 import (
 	"fmt"
+	"github.com/ledgerwatch/erigon-lib/metrics"
 	"reflect"
 	"strings"
-
-	metrics2 "github.com/VictoriaMetrics/metrics"
-	"github.com/ledgerwatch/erigon/metrics"
 )
 
 var (
@@ -86,7 +84,7 @@ func createRPCMetricsLabel(method string, valid bool) string {
 
 }
 
-func newRPCServingTimerMS(method string, valid bool) *metrics2.Summary {
+func newRPCServingTimerMS(method string, valid bool) metrics.Summary {
 	label, ok := rpcMetricsLabels[valid][method]
 	if !ok {
 		label = createRPCMetricsLabel(method, valid)

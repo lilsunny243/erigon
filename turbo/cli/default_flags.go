@@ -51,6 +51,7 @@ var DefaultFlags = []cli.Flag{
 	&BadBlockFlag,
 
 	&utils.HTTPEnabledFlag,
+	&utils.HTTPServerEnabledFlag,
 	&utils.GraphQLEnabledFlag,
 	&utils.HTTPListenAddrFlag,
 	&utils.HTTPPortFlag,
@@ -62,6 +63,7 @@ var DefaultFlags = []cli.Flag{
 	&utils.HTTPVirtualHostsFlag,
 	&utils.AuthRpcVirtualHostsFlag,
 	&utils.HTTPApiFlag,
+	&utils.WSPortFlag,
 	&utils.WSEnabledFlag,
 	&utils.WsCompressionFlag,
 	&utils.HTTPTraceFlag,
@@ -74,6 +76,8 @@ var DefaultFlags = []cli.Flag{
 	&utils.RpcGasCapFlag,
 	&utils.RpcBatchLimit,
 	&utils.RpcReturnDataLimit,
+	&utils.AllowUnprotectedTxs,
+	&utils.RpcMaxGetProofRewindBlockCount,
 	&utils.RPCGlobalTxFeeCapFlag,
 	&utils.TxpoolApiAddrFlag,
 	&utils.TraceMaxtracesFlag,
@@ -152,8 +156,6 @@ var DefaultFlags = []cli.Flag{
 	&utils.EthStatsURLFlag,
 	&utils.OverrideCancunFlag,
 
-	&utils.ConfigFlag,
-
 	&utils.LightClientDiscoveryAddrFlag,
 	&utils.LightClientDiscoveryPortFlag,
 	&utils.LightClientDiscoveryTCPPortFlag,
@@ -162,5 +164,29 @@ var DefaultFlags = []cli.Flag{
 
 	&utils.OtsSearchMaxCapFlag,
 
+	&utils.SilkwormExecutionFlag,
+	&utils.SilkwormRpcDaemonFlag,
+	&utils.SilkwormSentryFlag,
+
+	&utils.BeaconAPIFlag,
+	&utils.BeaconApiAddrFlag,
+	&utils.BeaconApiAllowMethodsFlag,
+	&utils.BeaconApiAllowOriginsFlag,
+	&utils.BeaconApiAllowCredentialsFlag,
+	&utils.BeaconApiPortFlag,
+	&utils.BeaconApiReadTimeoutFlag,
+	&utils.BeaconApiWriteTimeoutFlag,
+	&utils.BeaconApiProtocolFlag,
+	&utils.BeaconApiIdleTimeoutFlag,
+
+	&utils.CaplinBackfillingFlag,
+	&utils.CaplinArchiveFlag,
+
 	&utils.TrustedSetupFile,
+	&utils.RPCSlowFlag,
+
+	&utils.TxPoolGossipDisableFlag,
+	&SyncLoopBlockLimitFlag,
+	&SyncLoopBreakAfterFlag,
+	&SyncLoopPruneLimitFlag,
 }

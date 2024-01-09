@@ -19,14 +19,17 @@ package downloader
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/ledgerwatch/log/v3"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"github.com/ledgerwatch/erigon-lib/gointerfaces"
 	proto_downloader "github.com/ledgerwatch/erigon-lib/gointerfaces/downloader"
 	prototypes "github.com/ledgerwatch/erigon-lib/gointerfaces/types"
-	"github.com/ledgerwatch/log/v3"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
@@ -42,11 +45,21 @@ type GrpcServer struct {
 	d *Downloader
 }
 
-// Download - create new .torrent ONLY if initialSync, everything else Erigon can generate by itself
-func (s *GrpcServer) Download(ctx context.Context, request *proto_downloader.DownloadRequest) (*emptypb.Empty, error) {
+func (s *GrpcServer) ProhibitNewDownloads(context.Context, *proto_downloader.ProhibitNewDownloadsRequest) (*emptypb.Empty, error) {
+	if err := s.d.prohibitNewDownloads(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// Erigon "download once" - means restart/upgrade/downgrade will not download files (and will be fast)
+// After "download once" - Erigon will produce and seed new files
+// Downloader will able: seed new files (already existing on FS), download uncomplete parts of existing files (if Verify found some bad parts)
+func (s *GrpcServer) Add(ctx context.Context, request *proto_downloader.AddRequest) (*emptypb.Empty, error) {
+	defer s.d.ReCalcStats(10 * time.Second) // immediately call ReCalc to set stat.Complete flag
+
 	logEvery := time.NewTicker(20 * time.Second)
 	defer logEvery.Stop()
-	defer s.d.applyWebseeds()
 
 	for i, it := range request.Items {
 		if it.Path == "" {
@@ -67,16 +80,43 @@ func (s *GrpcServer) Download(ctx context.Context, request *proto_downloader.Dow
 			continue
 		}
 
-		if err := s.d.AddInfoHashAsMagnetLink(ctx, Proto2InfoHash(it.TorrentHash), it.Path); err != nil {
+		if err := s.d.AddMagnetLink(ctx, Proto2InfoHash(it.TorrentHash), it.Path); err != nil {
 			return nil, err
 		}
 	}
-	s.d.ReCalcStats(10 * time.Second) // immediately call ReCalc to set stat.Complete flag
+
+	return &emptypb.Empty{}, nil
+}
+
+// Delete - stop seeding, remove file, remove .torrent
+func (s *GrpcServer) Delete(ctx context.Context, request *proto_downloader.DeleteRequest) (*emptypb.Empty, error) {
+	defer s.d.ReCalcStats(10 * time.Second) // immediately call ReCalc to set stat.Complete flag
+	torrents := s.d.torrentClient.Torrents()
+	for _, name := range request.Paths {
+		if name == "" {
+			return nil, fmt.Errorf("field 'path' is required")
+		}
+		for _, t := range torrents {
+			select {
+			case <-t.GotInfo():
+				continue
+			default:
+			}
+			if t.Name() == name {
+				t.Drop()
+				break
+			}
+		}
+
+		fPath := filepath.Join(s.d.SnapDir(), name)
+		_ = os.Remove(fPath)
+		s.d.torrentFiles.Delete(name)
+	}
 	return &emptypb.Empty{}, nil
 }
 
 func (s *GrpcServer) Verify(ctx context.Context, request *proto_downloader.VerifyRequest) (*emptypb.Empty, error) {
-	err := s.d.VerifyData(ctx)
+	err := s.d.VerifyData(ctx, nil, false)
 	if err != nil {
 		return nil, err
 	}

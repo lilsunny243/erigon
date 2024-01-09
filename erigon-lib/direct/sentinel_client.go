@@ -20,6 +20,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/ledgerwatch/erigon-lib/diagnostics"
 	"github.com/ledgerwatch/erigon-lib/gointerfaces/sentinel"
 	"google.golang.org/grpc"
 )
@@ -63,7 +64,7 @@ func (s *SentinelClientDirect) PublishGossip(ctx context.Context, in *sentinel.G
 
 // Subscribe gossip part. the only complex section of this bullshit
 
-func (s *SentinelClientDirect) SubscribeGossip(ctx context.Context, in *sentinel.EmptyMessage, opts ...grpc.CallOption) (sentinel.Sentinel_SubscribeGossipClient, error) {
+func (s *SentinelClientDirect) SubscribeGossip(ctx context.Context, in *sentinel.SubscriptionData, opts ...grpc.CallOption) (sentinel.Sentinel_SubscribeGossipClient, error) {
 	ch := make(chan *gossipReply, 16384)
 	streamServer := &SentinelSubscribeGossipS{ch: ch, ctx: ctx}
 	go func() {
@@ -109,4 +110,13 @@ func (s *SentinelSubscribeGossipS) Err(err error) {
 		return
 	}
 	s.ch <- &gossipReply{err: err}
+}
+
+func (s *SentinelClientDirect) GetPeersStatistics() map[string]*diagnostics.PeerStatistics {
+
+	if diag, ok := s.server.(diagnostics.PeerStatisticsGetter); ok {
+		return diag.GetPeersStatistics()
+	}
+
+	return map[string]*diagnostics.PeerStatistics{}
 }

@@ -154,10 +154,10 @@ func TestDedupHashes(t *testing.T) {
 
 	h = toHashes()
 	c = h.DedupCopy()
-	assert.Equal(0, h.Len())
-	assert.Equal(0, c.Len())
-	assert.Equal(0, len(h))
-	assert.Equal(0, len(c))
+	assert.Zero(h.Len())
+	assert.Zero(c.Len())
+	assert.Zero(len(h))
+	assert.Zero(len(c))
 
 	h = toHashes(1, 2, 3, 4)
 	c = h.DedupCopy()
@@ -194,7 +194,10 @@ func TestBlobTxParsing(t *testing.T) {
 	bodyRlp := hexutility.MustDecodeHex(bodyRlpHex)
 
 	hasEnvelope := true
-	bodyEnvelope := hexutility.MustDecodeHex("b9012b03")
+	bodyEnvelopePrefix := hexutility.MustDecodeHex("b9012b")
+	var bodyEnvelope []byte
+	bodyEnvelope = append(bodyEnvelope, bodyEnvelopePrefix...)
+	bodyEnvelope = append(bodyEnvelope, BlobTxType)
 	bodyEnvelope = append(bodyEnvelope, bodyRlp...)
 
 	ctx := NewTxParseContext(*uint256.NewInt(5))
@@ -208,7 +211,7 @@ func TestBlobTxParsing(t *testing.T) {
 	p, err := ctx.ParseTransaction(bodyEnvelope, 0, &thinTx, nil, hasEnvelope, wrappedWithBlobs, nil)
 	require.NoError(t, err)
 	assert.Equal(t, len(bodyEnvelope), p)
-	assert.Equal(t, len(bodyEnvelope), int(thinTx.Size))
+	assert.Equal(t, len(bodyEnvelope)-len(bodyEnvelopePrefix), int(thinTx.Size))
 	assert.Equal(t, bodyEnvelope[3:], thinTx.Rlp)
 	assert.Equal(t, BlobTxType, thinTx.Type)
 	assert.Equal(t, 2, len(thinTx.BlobHashes))
