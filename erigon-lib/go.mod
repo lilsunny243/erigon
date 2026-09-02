@@ -1,6 +1,6 @@
 module github.com/ledgerwatch/erigon-lib
 
-go 1.20
+go 1.25.0
 
 require (
 	github.com/erigontech/mdbx-go v0.27.21
@@ -38,16 +38,16 @@ require (
 	github.com/prometheus/client_model v0.5.0
 	github.com/quasilyte/go-ruleguard/dsl v0.3.22
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/btree v1.6.0
-	golang.org/x/crypto v0.17.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
-	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.16.0
+	golang.org/x/sync v0.20.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/time v0.5.0
-	google.golang.org/grpc v1.60.1
+	google.golang.org/grpc v1.83.1
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.3.0
-	google.golang.org/protobuf v1.33.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -84,7 +84,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.7.0 // indirect
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
-	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/consensys/bavard v0.1.13 // indirect
 	github.com/consensys/gnark-crypto v0.12.1 // indirect
@@ -94,11 +94,10 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-llsqlite/adapter v0.0.0-20230912124304-94ed0e573c23 // indirect
 	github.com/go-llsqlite/crawshaw v0.0.0-20230910110433-7e901377eb6c // indirect
-	github.com/go-logr/logr v1.2.3 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/google/uuid v1.3.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/huandu/xstrings v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -133,13 +132,15 @@ require (
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
 	github.com/sirupsen/logrus v1.9.0 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
-	go.opentelemetry.io/otel v1.8.0 // indirect
-	go.opentelemetry.io/otel/trace v1.8.0 // indirect
-	golang.org/x/mod v0.14.0 // indirect
-	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
-	golang.org/x/tools v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20231002182017-d307bd883b97 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.24.1 // indirect
 	modernc.org/mathutil v1.6.0 // indirect
